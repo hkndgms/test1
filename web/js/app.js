@@ -10,6 +10,7 @@ import { makeZip } from './zip.js';
 import { Plan2D, findById, findMepById } from './view2d.js';
 import { buildPrompt, parseAnswer } from './ai-prompt.js';
 import { readRvt } from './rvt.js';
+import { diagnose, SEV_LABEL } from './diagnose.js';
 
 const $ = (id) => document.getElementById(id);
 const SAMPLE_DWG = 'samples/taziye-evi.dwg.b64.txt';
@@ -42,6 +43,7 @@ const state = {
   ceiling: { cm: 280, source: 'default', text: '' },
   ceilingAsked: false,
   elevations: null,
+  aiReport: null, // {report, issues}
 };
 
 // ------------------------------------------------------------ yardımcılar
@@ -167,6 +169,8 @@ function onDrawing(d, secs) {
   state.elevations = null;
   state.ceiling = { cm: 280, source: 'default', text: '' };
   state.ceilingAsked = false;
+  state.aiReport = null;
+  renderReport();
   $('ceilDlg').hidden = true;
   plan.setDrawing(d);
   autoRoles();
@@ -185,7 +189,6 @@ function onDrawing(d, secs) {
 function renderFacts(secs) {
   const d = state.drawing;
   const f = $('facts');
-  f.hidden = false;
   f.innerHTML = `
     <dt>Birim</dt><dd>${esc(UNIT_NAMES[d.units] || '?')} (INSUNITS ${d.units})</dd>
     <dt>Katman</dt><dd>${d.layers.filter((l) => l.count).length} dolu / ${d.layers.length}</dd>
@@ -282,9 +285,11 @@ $('layerRows').addEventListener('change', (e) => {
 });
 function applyLayerFilter() {
   const q = $('layerFilter').value.trim().toLowerCase();
-  for (const tr of $('layerRows').querySelectorAll('tr[data-i]')) tr.hidden = q && !tr.dataset.name.includes(q);
+  const only = $('onlyAssigned').checked && !q;
+  for (const tr of $('layerRows').querySelectorAll('tr[data-i]')) tr.hidden = (q && !tr.dataset.name.includes(q)) || (only && !tr.className.includes('role-'));
 }
 $('layerFilter').oninput = applyLayerFilter;
+$('onlyAssigned').onchange = applyLayerFilter;
 $('btnAuto').onclick = () => { if (!state.drawing) return; state.units = UNIT_TO_CM[state.drawing.units] != null && state.drawing.units !== 0 ? state.drawing.units : 5; autoRoles(); state.region = null; renderLayers(); runDetect(); plan.fitModel(); };
 $('btnRegion').onclick = () => {
   if (!state.drawing) return;
@@ -370,6 +375,8 @@ function runMep(rebuild = true) {
     if (state.elevations.ceiling) state.ceiling = { cm: state.elevations.ceiling.cm, source: 'project', text: state.elevations.ceiling.text };
   }
   renderMepPanel();
+  renderTodo();
+  renderReport();
   if (mepCount() && state.ceiling.source === 'default' && !state.ceilingAsked) askCeiling();
   if (rebuild) rebuild3d();
 }
@@ -394,7 +401,7 @@ function renderStats() {
   if (m) {
     const area = live(m.rooms).reduce((s, r) => s + Math.abs(r.area), 0) * m.unitScale ** 2 / 1e4;
     const ext = walls.filter((w) => w.exterior).length;
-    $('resultNote').textContent = `${ext} dış, ${walls.length - ext} iç duvar · mahallerin toplamı ${area.toFixed(1)} m². Plandaki bir öğeye tıklayarak düzenleyin.`;
+    $('resultNote').textContent = m.walls.length ? `${ext} dış, ${walls.length - ext} iç duvar · mahaller toplam ${area.toFixed(1)} m²` : 'Mimari bulunamadı (yalnız tesisat).';
   }
 }
 
@@ -424,6 +431,7 @@ function setOv(id, patch) {
   state.overrides[id] = { ...(state.overrides[id] || {}), ...patch };
   plan.setModel(state.model, state.overrides);
   renderStats();
+  renderTodo();
   rebuild3d();
   renderSel();
 }
@@ -433,6 +441,14 @@ function numField(id, label, value, unit = 'cm') {
 }
 
 function renderSel() {
+  renderSelInner();
+  const has = !!state.selected && $('selPanel').innerHTML.trim() !== '';
+  $('selCard').hidden = !has;
+  $('hintBar').hidden = has;
+}
+$('selClose').onclick = () => select(null);
+
+function renderSelInner() {
   const box = $('selPanel');
   const me = findMepById(state.mep, state.selected);
   if (me) return renderMepSel(box, me);
@@ -573,16 +589,13 @@ $('sysChips').addEventListener('change', (e) => {
   plan.setMep(state.mep, state.mepProfiles, { visible: state.mepVisible, systems: visibleSystems() });
   state.view3d?.setVisibility({ arch: state.archVisible, systems: visibleSystems() });
 });
-$('mepOn').onchange = () => {
-  state.mepVisible = $('mepOn').checked;
-  plan.setMep(state.mep, state.mepProfiles, { visible: state.mepVisible, systems: visibleSystems() });
-  rebuild3d();
-};
-$('archOn').onchange = () => { state.archVisible = $('archOn').checked; state.view3d?.setVisibility({ arch: state.archVisible, systems: visibleSystems() }); };
+$('mepOn').onchange = () => setMepVisible($('mepOn').checked);
+$('archOn').onchange = () => setArchVisible($('archOn').checked);
 function setCeiling(cm, source, text = '') {
   if (!(cm >= 150 && cm <= 2000)) return;
   state.ceiling = { cm: Math.round(cm), source, text };
   renderMepPanel();
+  renderTodo();
   rebuild3d();
 }
 $('ceilCm').onchange = () => setCeiling(parseFloat($('ceilCm').value), 'user');
@@ -665,6 +678,76 @@ $('btnKbReset').onclick = () => {
   aiStatus('Öğrenilmiş kurallar silindi; yerleşik kurallar duruyor.', 'ok');
 };
 
+// ------------------------------------------------------------ yapay zekâ analiz raporu
+function renderReport() {
+  const box = $('aiReport');
+  const diag = state.drawing ? diagnose(state) : [];
+  const r = state.aiReport;
+  let html = '';
+  if (r) {
+    html += `<div class="report"><b>Yapay zekâ analizi</b>${r.report ? `<p>${esc(r.report)}</p>` : ''}${r.issues.length ? '<ul>' + r.issues.map((x) => `<li class="sev-${esc(x.severity)}"><b>${esc(x.title)}</b>${x.detail ? ' — ' + esc(x.detail) : ''} <i>${x.fixed ? 'düzeltildi' : 'sizde'}</i></li>`).join('') + '</ul>' : ''}</div>`;
+  }
+  if (diag.length) html += `<details class="fold" ${r ? '' : 'open'}><summary>Programın tespitleri (${diag.length})</summary><ul class="diag">${diag.map((x) => `<li class="sev-${x.severity}"><i>${SEV_LABEL[x.severity]}</i> ${esc(x.text)}</li>`).join('')}</ul></details>`;
+  box.innerHTML = html;
+}
+
+// ------------------------------------------------------------ yan panel sekmeleri
+function showPanel(id) {
+  for (const b of document.querySelectorAll('.stab')) { const on = b.dataset.panel === id; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); }
+  for (const p of document.querySelectorAll('.panel')) p.hidden = p.id !== id;
+  document.querySelector('aside').scrollTop = 0;
+}
+for (const b of document.querySelectorAll('.stab')) b.onclick = () => showPanel(b.dataset.panel);
+
+// ------------------------------------------------------------ yapılacaklar
+function renderTodo() {
+  const items = [];
+  const d = state.drawing;
+  if (!d) items.push(['info', 'Bir DWG veya DXF dosyası açın.']);
+  else {
+    const diag = diagnose(state);
+    const open = diag.filter((x) => x.severity !== 'low').length;
+    if (diag.length && !state.aiReport) items.push(['warn', `Programın emin olmadığı ${diag.length} nokta var${open ? ` (${open} önemli/orta)` : ''}. Yapay zekâya bütün projeyi analiz ettirin.`, 'Analiz ettir', () => { showPanel('pAi'); $('btnPrompt').click(); }]);
+    for (const it of (state.aiReport?.issues || []).filter((x) => !x.fixed).slice(0, 5)) items.push([it.severity === 'low' ? 'info' : 'warn', `YZ: ${it.title}${it.detail ? ' — ' + it.detail : ''}`]);
+    const unknown = state.mepStats.filter((st) => { const p = state.mepProfiles.get(st.l); return p?.unknown && !p.kind; }).length;
+    if (!state.model?.walls.length && !mepCount()) items.push(['warn', 'Duvar veya tesisat bulunamadı. Duvar katmanını seçin.', 'Katmanlar', () => { showPanel('pArch'); $('onlyAssigned').checked = false; applyLayerFilter(); }]);
+    if (mepCount() && state.ceiling.source === 'default') items.push(['warn', 'Asma tavan kotu projede yok; tesisat 280 cm varsayımıyla duruyor.', 'Kotu gir', () => askCeiling()]);
+    if (unknown) items.push(['warn', `${unknown} tesisat katmanı tanınmadı.`, 'Asistana sor', () => showPanel('pAi')]);
+    if (state.unitNote) items.push(['info', state.unitNote]);
+    const ext = state.model?.openings.filter((o) => o.exterior && (state.overrides[o.id]?.kind || o.kind) === 'window').length || 0;
+    if (ext && !state.model.openings.some((o) => o.exterior && (state.overrides[o.id]?.kind || o.kind) === 'door')) items.push(['info', 'Dış cephedeki boşlukların hepsi pencere sayıldı. Giriş kapılarını planda tıklayıp "Kapı" yapın.']);
+    if (state.islands?.length > 1) items.push(['ok', `Paftadaki ${state.islands.length - 1} ilgisiz çizim grubu (lejant, şema, detay, kalıntı) ayıklandı.`]);
+    if (state.model?.walls.length || mepCount()) items.push(['ok', 'Model hazır; IFC olarak indirebilirsiniz.', 'IFC indir', () => exportIfc()]);
+  }
+  const ul = $('todo');
+  ul.innerHTML = items.map(([k, t, b], i) => `<li class="t-${k}"><span>${esc(t)}</span>${b ? `<button class="btn small" data-i="${i}">${esc(b)}</button>` : ''}</li>`).join('');
+  ul.querySelectorAll('button[data-i]').forEach((btn) => (btn.onclick = items[+btn.dataset.i][3]));
+  // tesisat sekmesinde dikkat noktası
+  $('mepDot').hidden = !items.some((x) => x[0] === 'warn' && /tesisat|kot/i.test(x[1]));
+  // özet: sistem başına tesisat miktarı
+  const sum = mepSummary();
+  $('mepSum').innerHTML = [...sum.entries()].map(([k, v]) => `<span><i class="dot" style="background:${(SYSTEMS[k] || SYSTEMS.other).color}"></i>${esc((SYSTEMS[k] || SYSTEMS.other).label)} ${v.pipeM ? v.pipeM.toFixed(0) + ' m' : ''}${v.pipeM && v.n ? ' · ' : ''}${v.n ? v.n + ' ad.' : ''}</span>`).join('');
+}
+
+// Üst çubuktaki Mimari / Tesisat düğmeleri, Tesisat sekmesindeki kutularla eş
+function setArchVisible(v) {
+  state.archVisible = v;
+  $('archOn').checked = v;
+  $('tglArch').classList.toggle('on', v);
+  plan.archVisible = v;
+  plan.draw();
+  state.view3d?.setVisibility({ arch: v, systems: visibleSystems() });
+}
+function setMepVisible(v) {
+  state.mepVisible = v;
+  $('mepOn').checked = v;
+  $('tglMep').classList.toggle('on', v);
+  plan.setMep(state.mep, state.mepProfiles, { visible: v, systems: visibleSystems() });
+  rebuild3d();
+}
+$('tglArch').onclick = () => setArchVisible(!state.archVisible);
+$('tglMep').onclick = () => setMepVisible(!state.mepVisible);
+
 // ------------------------------------------------------------ görünüm düğmeleri
 $('btnFit').onclick = () => plan.fitModel();
 $('btnFitAll').onclick = () => plan.fit(state.drawing?.bbox);
@@ -716,13 +799,18 @@ function currentPrompt() {
   return buildPrompt({
     drawing: state.drawing, roles: state.roles, params: state.params, buildParams: state.build, model: state.model, fileName: state.fileName,
     mepStats: state.mepStats, mepProfiles: state.mepProfiles, elevations: state.elevations, ceiling: state.ceiling, islands: state.islands,
+    diagnostics: diagnose(state), mep: state.mep,
   });
 }
 $('btnPrompt').onclick = () => {
   if (!state.drawing) return;
-  $('promptOut').value = currentPrompt();
+  const t = $('promptOut');
+  t.value = currentPrompt();
   $('btnCopy').disabled = false;
-  aiStatus(`Komut hazır (${$('promptOut').value.length.toLocaleString('tr')} karakter). Kopyalayıp yapay zekâya yapıştırın.`);
+  navigator.clipboard.writeText(t.value).then(
+    () => aiStatus(`Komut kopyalandı (${t.value.length.toLocaleString('tr')} karakter). Şimdi bir yapay zekâ sohbetine yapıştırın, cevabı aşağıdaki kutuya yapıştırın.`, 'ok'),
+    () => { t.closest('details').open = true; t.focus(); t.select(); aiStatus('Otomatik kopyalanamadı; komut seçildi, Ctrl+C ile kopyalayın.'); },
+  );
 };
 $('btnCopy').onclick = () => {
   const t = $('promptOut');
@@ -732,6 +820,11 @@ $('btnCopy').onclick = () => {
   );
 };
 $('answerIn').oninput = () => ($('btnApply').disabled = !$('answerIn').value.trim() || !state.drawing);
+// Cevap yapıştırılınca kendiliğinden uygula
+$('answerIn').addEventListener('paste', () => setTimeout(() => {
+  $('answerIn').oninput();
+  if (state.drawing && /\{[\s\S]*\}/.test($('answerIn').value)) applyAnswer();
+}, 0));
 capSample.then((sample) => {
   if (!sample) return;
   const b = $('btnAsk');
@@ -742,12 +835,12 @@ capSample.then((sample) => {
     const prompt = currentPrompt();
     $('promptOut').value = prompt;
     b.disabled = true;
-    aiStatus('Claude düşünüyor…');
+    aiStatus('Claude projeyi analiz ediyor… (yarım dakika kadar sürebilir)');
     try {
       const r = await sample(prompt, { onText: ({ text }) => { $('answerIn').value = text; } });
       $('answerIn').value = r.text;
       $('btnApply').disabled = false;
-      aiStatus('Cevap geldi. Kontrol edip "Cevabı uygula"ya basın.', 'ok');
+      applyAnswer();
     } catch (e) {
       aiStatus(e?.code === 'not_granted' ? 'Claude erişimine izin verilmedi.' : 'Claude cevap veremedi: ' + (e?.message || e?.code), 'err');
     } finally { b.disabled = false; }
@@ -838,6 +931,12 @@ function applyAnswer() {
   renderStats();
   rebuild3d();
   renderSel();
+  if (a.report || Array.isArray(a.issues)) {
+    state.aiReport = { report: String(a.report || ''), issues: (Array.isArray(a.issues) ? a.issues : []).slice(0, 20) };
+    renderReport();
+    done.push('analiz raporu');
+  }
+  renderTodo();
   let msg = done.length ? 'Uygulandı: ' + done.join(', ') + '.' : 'Cevapta uygulanacak bir ayar bulunamadı.';
   if (Array.isArray(a.questions) && a.questions.length) msg += ' Yapay zekânın soruları: ' + a.questions.slice(0, 3).join(' / ');
   if (missing.length) msg += ' Bulunamayan katman: ' + missing.join(', ') + '.';
@@ -850,6 +949,7 @@ $('btnApply').onclick = applyAnswer;
 // ------------------------------------------------------------ RVT inceleme
 const rvtStatus = (m, k) => setStatus($('rvtStatus'), m, k);
 async function inspectRvt(file) {
+  showPanel('pSum');
   $('stepRvt').open = true;
   rvtStatus('RVT okunuyor…');
   try {

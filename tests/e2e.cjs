@@ -60,7 +60,8 @@ const { chromium } = require(process.env.PW || 'playwright');
   await page.screenshot({ path: path.join(out, 'e2e-3d.png') });
   await page.click('#tabPlan');
   // yapay zekâ komutu
-  await page.click('#stepAi summary');
+  console.log('todo:', (await page.textContent('#todo')).replace(/\s+/g, ' ').slice(0, 400));
+  await page.click('#stabAi');
   await page.click('#btnPrompt');
   const prompt = await page.inputValue('#promptOut');
   console.log('prompt length', prompt.length);
@@ -69,19 +70,24 @@ const { chromium } = require(process.env.PW || 'playwright');
   await page.fill('#answerIn', '```json\n{"params":{"wallHeightCm":320,"doorHeightCm":220},"openings":{"O1":{"kind":"door"}},"rooms":{"R1":{"name":"Test Mahal"}},' +
     '"mep":{"M-HVAC EMİŞ":{"kind":"air","system":"returnair","elevRef":"ceiling","elevOffsetCm":-10,"sizeCm":25}},' +
     '"learn":[{"pattern":"YANGIN[\\\\s._-]*YMV|YANGIN[\\\\s._-]*DOLAB","kind":"equipment","system":"fire","elevRef":"floor","elevOffsetCm":60,"sizeCm":90,"note":"yangın dolabı"}],' +
-    '"ignore":[{"pattern":"KOLON[\\\\s._-]*SEMA","reason":"kolon şeması"}],"ceilingCm":300,"ceilingReason":"test","notes":"deneme"}\n```');
+    '"ignore":[{"pattern":"KOLON[\\\\s._-]*SEMA","reason":"kolon şeması"}],"ceilingCm":300,"ceilingReason":"test",' +
+    '"report":"Tek katlı taziye evi; soğuk su, pis su ve VRF sistemleri var.","issues":[{"severity":"medium","title":"Ana giriş kapısı","detail":"Güney cephedeki 150 cm boşluğu kapı yapın","fixed":false},{"severity":"low","title":"Emiş katmanı","detail":"dönüş havası olarak düzeltildi","fixed":true}],"notes":"deneme"}\n```');
   await page.click('#btnApply');
   console.log('ai:', await page.textContent('#aiStatus'));
+  console.log('report:', (await page.textContent('#aiReport')).replace(/\s+/g, ' ').slice(0, 300));
+  console.log('todo after ai:', (await page.textContent('#todo')).replace(/\s+/g, ' ').slice(0, 300));
+  await page.screenshot({ path: path.join(out, 'e2e-ai.png') });
   console.log('kb:', await page.textContent('#kbStats'), '|', (await page.textContent('#kbList')).slice(0, 160));
   console.log('ceiling after ai:', await page.inputValue('#ceilCm'), '|', await page.textContent('#ceilSrc'));
   const hasLearned = await page.evaluate(() => { try { return JSON.parse(localStorage.getItem('dwg2bim.kb.v1')).learned.length; } catch { return -1; } });
   console.log('localStorage learned rules:', hasLearned);
   // IFC indir
-  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.click('#btnExport')]);
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }), page.click('#btnExportTop')]);
   const p = path.join(out, dl.suggestedFilename());
   await dl.saveAs(p);
   console.log('download:', p);
   // RVT
+  await page.click('#stabSum');
   await page.click('#stepRvt summary');
   await page.click('#btnRvtSample');
   await page.waitForFunction(() => /Okundu|okunamadı|indirilemedi/.test(document.getElementById('rvtStatus').textContent), null, { timeout: 60000 });

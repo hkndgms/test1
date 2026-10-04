@@ -202,7 +202,7 @@ export class Plan2D {
       }
     }
     ctx.globalAlpha = 1;
-    if (this.model) this._drawModel(ctx, C, scale, world);
+    if (this.model && this.archVisible !== false) this._drawModel(ctx, C, scale, world);
     if (this.mep && this.mepVisible) this._drawMep(ctx, scale, world);
     if (this.region) {
       world();

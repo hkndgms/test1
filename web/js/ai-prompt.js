@@ -4,7 +4,7 @@
 import { UNIT_NAMES } from './detect.js';
 import { SYSTEMS, KINDS } from './kb.js';
 
-export function buildPrompt({ drawing, roles, params, buildParams, model, fileName, mepStats = [], mepProfiles = new Map(), elevations = null, ceiling = null, islands = [] }) {
+export function buildPrompt({ drawing, roles, params, buildParams, model, fileName, mepStats = [], mepProfiles = new Map(), elevations = null, ceiling = null, islands = [], diagnostics = [], mep = null }) {
   const layerRows = drawing.layers
     .map((l, i) => ({ i, ...l }))
     .filter((l) => l.count > 0)
@@ -33,7 +33,16 @@ export function buildPrompt({ drawing, roles, params, buildParams, model, fileNa
     });
   const kotRows = (elevations?.candidates || []).map((k) => `+${(k.cm / 100).toFixed(2)} (${k.count} kez)`).join(', ');
 
-  return `Sen bir mimari BIM asistanısın. "DWG2BIM" adlı bir tarayıcı uygulaması bir AutoCAD DWG kat planından 3B BIM modeli (IFC) üretiyor. Aşağıda uygulamanın çizimden çıkardığı özet var. Görevin: uygulamanın modeli doğru kurması için gereken ayarları SADECE aşağıdaki JSON biçiminde geri vermek.
+  const diagRows = diagnostics.map((x, i) => `${i + 1}. [${x.severity}] ${x.text}${x.data && x.data.length && x.data.length <= 40 ? ' (' + x.data.join(', ') + ')' : ''}`);
+  const named = mep ? [...new Set(mep.boxes.filter((b) => b.name).map((b) => b.name))].slice(0, 30) : [];
+
+  return `Sen deneyimli bir mimari ve MEKANİK TESİSAT BIM uzmanısın. "DWG2BIM" adlı bir tarayıcı uygulaması bir AutoCAD DWG paftasından mimari + mekanik tesisat 3B BIM modeli (IFC) üretiyor. Aşağıda uygulamanın çizimden çıkardığı özet ve kendi tespit ettiği SORUNLAR var.
+Görevin bütün projeyi bir uzman gözüyle ANALİZ ETMEK:
+1) Programın listelediği sorun ve belirsizliklerin her birini değerlendir; düzeltebildiklerini aşağıdaki JSON alanlarıyla doğrudan düzelt.
+2) Programın görmediği tutarsızlıkları da ara (ör. yanlış sistem atanmış katman, mantıksız kot, eksik giriş kapısı, şema/lejant olabilecek katmanlar, tesisatta eksik sistem).
+3) Gelecek projelerde işe yarayacak genel kurallar öner (learn / ignore) ki program kendini geliştirsin.
+4) Kısa bir analiz raporu ve sorun listesi yaz.
+Cevabın SADECE aşağıdaki JSON biçiminde olsun.
 
 KURALLAR
 - Cevabın tek bir \`\`\`json kod bloğu olsun; açıklamaları "notes" alanına yaz.
@@ -56,6 +65,10 @@ MEKANİK TESİSAT (asıl önem burada)
 - "ceilingCm": asma tavan kotu (cm) — yalnız çizimden makul bir çıkarım yapabiliyorsan; "ceilingReason" ile gerekçesini yaz. Emin değilsen yazma, uygulama kullanıcıya soracak.
 - "questions": bu katmanlardan emin olamadıkların için kullanıcıya sorulacak kısa sorular (en çok 3).
 
+ANALİZ ÇIKTISI
+- "report": projenin 3-6 cümlelik özeti (ne tür bir yapı, hangi tesisat sistemleri var, modelin güvenilirliği, kullanıcının dikkat etmesi gerekenler). Türkçe yaz.
+- "issues": [{"severity":"high|medium|low","title":"kısa başlık","detail":"ne yapılmalı","fixed":true|false}] — fixed=true: bu cevaptaki alanlarla düzelttin; false: kullanıcının yapması gerekiyor.
+
 İSTENEN CEVAP BİÇİMİ
 \`\`\`json
 {
@@ -73,6 +86,8 @@ MEKANİK TESİSAT (asıl önem burada)
   "ignore": [ { "pattern": "KOLON[\\s._-]*SEMA|RISER[\\s._-]*DIAGRAM", "reason": "kolon şeması" } ],
   "ceilingCm": 290, "ceilingReason": "...",
   "questions": ["..."],
+  "report": "...",
+  "issues": [ { "severity": "medium", "title": "...", "detail": "...", "fixed": false } ],
   "notes": "kısa açıklama"
 }
 \`\`\`
@@ -98,6 +113,12 @@ Boşluklar (id, genişlik cm, konum, şu anki tür):
 ${openingRows.join('\n') || '-'}
 Mahaller (id, alan, ad):
 ${roomRows.join('\n') || '-'}
+
+PROGRAMIN TESPİT ETTİĞİ SORUNLAR VE BELİRSİZLİKLER
+${diagRows.join('\n') || 'Belirgin sorun bulunmadı; yine de bütün projeyi kontrol et.'}
+
+ADIYLA TANINAN CİHAZ BLOKLARI
+${named.join(', ') || '-'}
 
 TESİSAT KATMANLARI (asıl plan bölgesinde; ad, içerik özeti → uygulamanın şu anki kararı [kaynak])
 ${mepRows.join('\n') || '-'}

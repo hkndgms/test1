@@ -37,7 +37,7 @@
 html, body { height: 100%; }
 body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); margin: 0; font-feature-settings: 'locl' 0; }
 * { box-sizing: border-box; }
-button, input, select, textarea { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; font-feature-settings: 'locl' 0; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
@@ -127,7 +127,7 @@ details.adv[open] .grid2 { margin-top: 8px; }
 .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-left: auto; }
 .legend span { display: inline-flex; align-items: center; gap: 4px; }
 .stage { position: relative; min-height: 0; }
-.stage > div { position: absolute; inset: 0; }
+#planWrap, #view3dWrap { position: absolute; inset: 0; }
 .stage canvas { display: block; touch-action: none; }
 #plan { cursor: crosshair; }
 .overlay { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
@@ -175,7 +175,53 @@ details.adv[open] .grid2 { margin-top: 8px; }
 .dlg .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; max-width: 44ch; display: grid; gap: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.18); }
 .dlg .card b { font: 700 17px var(--font-head); letter-spacing: .04em; text-transform: uppercase; }
 
+/* sekmeli yan panel */
+aside { padding: 0 16px 24px; }
+.stabs { position: sticky; top: 0; z-index: 2; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; background: var(--panel); padding: 10px 0 8px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.stab { position: relative; border: 0; background: none; padding: 8px 4px; border-radius: var(--r); cursor: pointer; font: 600 14px var(--font-head); letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.stab:hover { color: var(--ink); }
+.stab.on { color: var(--ink); background: var(--bg); box-shadow: inset 0 -2px 0 var(--accent); }
+.tdot { position: absolute; top: 6px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
+.panel { display: grid; gap: 12px; }
+.card-s { display: grid; gap: 8px; }
+.card-s + .card-s { border-top: 1px solid var(--line); padding-top: 12px; }
+.card-s h3 { font: 700 13px/1.2 var(--font-head); letter-spacing: .07em; text-transform: uppercase; margin: 0; color: var(--muted); }
+.drop { display: grid; gap: 6px; justify-items: center; }
+.drop b { font-weight: 600; color: var(--ink); }
+.btn.wide { width: 100%; padding: 10px; }
+details.fold { border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 8px; }
+details.fold > summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+details.fold[open] > summary { margin-bottom: 6px; }
+.todo { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.todo li { display: flex; gap: 8px; align-items: center; padding: 7px 9px; border-radius: var(--r); border: 1px solid var(--line); background: var(--field); font-size: 13px; }
+.todo li::before { content: ''; flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+.todo li.t-warn { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.todo li.t-warn::before { background: var(--warn); }
+.todo li.t-ok::before { background: var(--good); }
+.todo li.t-info::before { background: var(--accent); }
+.todo li span { flex: 1; min-width: 0; }
+.todo li .btn { flex: none; }
+.mepsum { display: flex; flex-wrap: wrap; gap: 4px; }
+.mepsum span { font: 11px var(--font-mono); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; display: inline-flex; gap: 4px; align-items: center; background: var(--field); }
+ol.steps { margin: 0; padding-left: 20px; display: grid; gap: 10px; }
+ol.steps li { display: grid; gap: 6px; justify-items: start; }
+ol.steps li::marker { font: 600 13px var(--font-mono); color: var(--accent); }
+ol.steps textarea { width: 100%; }
+.vtools { display: flex; gap: 4px; margin-left: 8px; }
+.report { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--r); padding: 10px; display: grid; gap: 6px; font-size: 13px; }
+.report p { margin: 0; }
+.report ul, ul.diag { margin: 0; padding-left: 16px; display: grid; gap: 4px; font-size: 12px; }
+.report li i, ul.diag li i { font-style: normal; font: 600 10px var(--font-ui); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+li.sev-high i { color: var(--bad) !important; }
+li.sev-medium i { color: var(--warn) !important; }
+.selcard { position: absolute; top: 12px; right: 12px; width: min(320px, calc(100% - 24px)); max-height: calc(100% - 70px); overflow: auto; z-index: 3; box-shadow: 0 8px 24px rgba(0,0,0,.16); border-radius: var(--r); }
+.selcard .sel { background: var(--panel); border-color: var(--accent); }
+.selcard .x { position: absolute; top: 4px; right: 6px; border: 0; background: none; font-size: 20px; line-height: 1; cursor: pointer; color: var(--muted); z-index: 1; }
+.hintbar { position: absolute; right: 12px; bottom: 12px; font-size: 12px; color: var(--muted); background: color-mix(in srgb, var(--panel) 85%, transparent); padding: 4px 8px; border-radius: var(--r); pointer-events: none; max-width: 50%; }
+
 @media (max-width: 860px) {
+  .hintbar { display: none; }
+  .selcard { top: auto; bottom: 56px; }
   .app { height: auto; }
   .work { grid-template-columns: 1fr; }
   main { order: -1; height: 62vh; border-bottom: 1px solid var(--line); }
@@ -193,114 +239,173 @@ details.adv[open] .grid2 { margin-top: 8px; }
 
 <div class="app" lang="tr">
   <header class="top">
-    <div class="brand"><h1>DWG<b>2</b>BIM</h1><span>Kat planından IFC modeli, tamamen tarayıcıda</span></div>
+    <div class="brand"><h1>DWG<b>2</b>BIM</h1><span>Kat planından mimari + tesisat BIM modeli</span></div>
     <div class="spacer"></div>
     <span class="filechip" id="fileChip">Dosya yok</span>
+    <label class="btn" for="fileInput">Dosya aç</label>
     <button class="btn primary" id="btnExportTop" disabled>IFC indir</button>
+    <input type="file" id="fileInput" accept=".dwg,.dxf" hidden>
   </header>
 
   <div class="work">
     <aside>
-      <section class="step" id="stepFile">
-        <h2><span class="no">01</span>Çizim</h2>
-        <div class="drop" id="drop">DWG veya DXF dosyasını buraya bırakın<br>
-          <div class="row" style="justify-content:center;margin-top:8px">
-            <label class="btn small" for="fileInput">Dosya seç</label>
-            <button class="btn small" id="btnSample">Örnek: Taziye Evi</button>
-          </div>
-          <input type="file" id="fileInput" accept=".dwg,.dxf" hidden>
+      <nav class="stabs" role="tablist" aria-label="Paneller">
+        <button class="stab on" role="tab" data-panel="pSum" id="stabSum">Özet</button>
+        <button class="stab" role="tab" data-panel="pArch" id="stabArch">Mimari</button>
+        <button class="stab" role="tab" data-panel="pMep" id="stabMep">Tesisat<i class="tdot" id="mepDot" hidden></i></button>
+        <button class="stab" role="tab" data-panel="pAi" id="stabAi">Asistan</button>
+      </nav>
+
+      <!-- ÖZET: dosya, yapılacaklar, sonuç, dışa aktarma -->
+      <div class="panel" id="pSum" role="tabpanel">
+        <div class="drop" id="drop"><b>DWG / DXF dosyasını buraya bırakın</b>
+          <span class="hint">veya üstteki <i>Dosya aç</i> düğmesini kullanın</span>
+          <button class="btn small" id="btnSample">Örnek proje: Taziye Evi</button>
         </div>
         <div class="status" id="status" role="status" aria-live="polite"></div>
-        <dl class="facts" id="facts" hidden></dl>
-      </section>
 
-      <section class="step" id="stepLayers">
-        <h2><span class="no">02</span>Katmanlar</h2>
-        <p class="hint">Duvar ve kolon katmanlarını seçin. Kapı/pencere işareti katmanları (açılış yayı, doğrama) boşluğun türünü belirler. Göz işareti yalnızca görünürlüğü değiştirir.</p>
-        <div class="row">
-          <button class="btn small" id="btnAuto">Otomatik seç</button>
-          <button class="btn small" id="btnRegion">Bölge çiz</button>
-          <button class="btn small" id="btnRegionReset">Bölgeyi sıfırla</button>
-        </div>
-        <input type="search" id="layerFilter" placeholder="Katman ara…" aria-label="Katman ara">
-        <div class="layers"><table><tbody id="layerRows"><tr><td class="hint">Önce bir çizim açın.</td></tr></tbody></table></div>
-      </section>
+        <section class="card-s" id="todoBox">
+          <h3>Yapılacaklar</h3>
+          <ul class="todo" id="todo"><li class="t-info"><span>Bir çizim açın.</span></li></ul>
+        </section>
 
-      <section class="step" id="stepParams">
-        <h2><span class="no">03</span>Ölçüler</h2>
-        <div class="grid2">
-          <div class="field"><label for="pUnits">Çizim birimi</label><select class="full" id="pUnits"></select></div>
-          <div class="field"><label for="wallHeightCm">Duvar yüksekliği</label><div class="unit" data-u="cm"><input type="number" id="wallHeightCm" min="100" step="5"></div></div>
-          <div class="field"><label for="doorHeightCm">Kapı yüksekliği</label><div class="unit" data-u="cm"><input type="number" id="doorHeightCm" min="100" step="5"></div></div>
-          <div class="field"><label for="windowSillCm">Pencere parapeti</label><div class="unit" data-u="cm"><input type="number" id="windowSillCm" min="0" step="5"></div></div>
-          <div class="field"><label for="windowHeightCm">Pencere yüksekliği</label><div class="unit" data-u="cm"><input type="number" id="windowHeightCm" min="20" step="5"></div></div>
-          <div class="field"><label for="slabThicknessCm">Döşeme kalınlığı</label><div class="unit" data-u="cm"><input type="number" id="slabThicknessCm" min="0" step="1"></div></div>
-          <div class="field"><label for="projectName">Proje adı</label><input type="text" id="projectName"></div>
-          <div class="field"><label for="storeyName">Kat adı</label><input type="text" id="storeyName"></div>
-        </div>
-        <div class="row">
-          <label class="check"><input type="checkbox" id="makeFloor"> Zemin döşemesi</label>
-          <label class="check"><input type="checkbox" id="makeRoof"> Tavan döşemesi</label>
-          <label class="check"><input type="checkbox" id="makeSpaces"> Mahaller</label>
-        </div>
-        <details class="adv">
-          <summary>Gelişmiş algılama ayarları</summary>
-          <div class="grid2">
-            <div class="field"><label for="minThicknessCm">En ince duvar</label><div class="unit" data-u="cm"><input type="number" id="minThicknessCm" min="1" step="1"></div></div>
-            <div class="field"><label for="maxThicknessCm">En kalın duvar</label><div class="unit" data-u="cm"><input type="number" id="maxThicknessCm" min="5" step="1"></div></div>
-            <div class="field"><label for="minGapCm">En dar boşluk</label><div class="unit" data-u="cm"><input type="number" id="minGapCm" min="10" step="5"></div></div>
-            <div class="field"><label for="maxGapCm">En geniş boşluk</label><div class="unit" data-u="cm"><input type="number" id="maxGapCm" min="50" step="10"></div></div>
-            <div class="field"><label for="maxDoorCm">En geniş iç kapı</label><div class="unit" data-u="cm"><input type="number" id="maxDoorCm" min="50" step="10"></div></div>
-            <div class="field"><label for="tolCm">Birleştirme toleransı</label><div class="unit" data-u="cm"><input type="number" id="tolCm" min="0.1" step="0.1"></div></div>
+        <section class="card-s">
+          <h3>Model</h3>
+          <div class="stats" id="stats">
+            <div class="stat"><b id="sWalls">–</b><span><i class="dot" style="background:var(--wall-ext)"></i>Duvar</span></div>
+            <div class="stat"><b id="sCols">–</b><span><i class="dot" style="background:var(--column)"></i>Kolon</span></div>
+            <div class="stat"><b id="sRooms">–</b><span><i class="dot" style="background:var(--room-sel)"></i>Mahal</span></div>
+            <div class="stat"><b id="sWin">–</b><span><i class="dot" style="background:var(--win)"></i>Pencere</span></div>
+            <div class="stat"><b id="sDoor">–</b><span><i class="dot" style="background:var(--door)"></i>Kapı</span></div>
+            <div class="stat"><b id="sEmpty">–</b><span><i class="dot" style="background:var(--empty)"></i>Geçiş</span></div>
           </div>
+          <p class="hint" id="resultNote"></p>
+          <div class="mepsum" id="mepSum"></div>
+        </section>
+
+        <section class="card-s">
+          <h3>Dışa aktar</h3>
+          <button class="btn primary wide" id="btnExport" disabled>IFC dosyasını indir</button>
+          <p class="note">IFC açık BIM standardıdır. Revit'te <b>Dosya › Aç › IFC</b>, ardından <b>Farklı Kaydet › RVT</b>. FreeCAD ve Blender (Bonsai) ile ücretsiz açılır.</p>
+        </section>
+
+        <details class="fold">
+          <summary>Dosya bilgisi</summary>
+          <dl class="facts" id="facts"><dt>Durum</dt><dd>Dosya yok</dd></dl>
         </details>
-        <button class="btn primary" id="btnDetect" disabled>Algıla ve oluştur</button>
-      </section>
 
-      <section class="step" id="stepResult">
-        <h2><span class="no">04</span>Sonuç</h2>
-        <div class="stats" id="stats">
-          <div class="stat"><b id="sWalls">–</b><span><i class="dot" style="background:var(--wall-ext)"></i>Duvar</span></div>
-          <div class="stat"><b id="sCols">–</b><span><i class="dot" style="background:var(--column)"></i>Kolon</span></div>
-          <div class="stat"><b id="sRooms">–</b><span><i class="dot" style="background:var(--room-sel)"></i>Mahal</span></div>
-          <div class="stat"><b id="sWin">–</b><span><i class="dot" style="background:var(--win)"></i>Pencere</span></div>
-          <div class="stat"><b id="sDoor">–</b><span><i class="dot" style="background:var(--door)"></i>Kapı</span></div>
-          <div class="stat"><b id="sEmpty">–</b><span><i class="dot" style="background:var(--empty)"></i>Geçiş</span></div>
-        </div>
-        <p class="hint" id="resultNote">Planda bir öğeye tıklayarak türünü ve ölçülerini değiştirebilirsiniz.</p>
-        <div id="selPanel"></div>
-      </section>
+        <details class="fold rvt" id="stepRvt">
+          <summary>RVT dosyası incele</summary>
+          <p class="hint">Revit olmadan okunabilenler: sürüm, önizleme, bağlantılar, tip adları. 3B geometri kapalı formatta olduğu için okunamaz.</p>
+          <div class="row">
+            <label class="btn small" for="rvtInput">RVT seç</label>
+            <button class="btn small" id="btnRvtSample">Örnek RVT</button>
+            <input type="file" id="rvtInput" accept=".rvt,.rfa,.rte" hidden>
+          </div>
+          <div class="status" id="rvtStatus"></div>
+          <div id="rvtOut"></div>
+        </details>
+        <p class="foot">Dosyalar bilgisayarınızdan çıkmaz; bütün işlem tarayıcıda yapılır. Açık kaynak: LibreDWG (GPL-3.0), three.js (MIT).</p>
+      </div>
 
-      <section class="step" id="stepMep">
-        <h2><span class="no">05</span>Mekanik tesisat</h2>
-        <p class="hint" id="mepNote">Çizim açıldığında tesisat katmanları bilgi bankasıyla sınıflandırılır. Bilinmeyenler sarı işaretlenir; yapay zekâ asistanına sorabilir veya elle seçebilirsiniz.</p>
-        <div class="row">
-          <label class="check"><input type="checkbox" id="mepOn" checked> Tesisatı göster</label>
-          <label class="check"><input type="checkbox" id="archOn" checked> Mimariyi göster (3B)</label>
-        </div>
-        <div class="syschips" id="sysChips"></div>
-        <div class="ceil" id="ceilBox">
-          <div class="field"><label for="ceilCm">Asma tavan kotu (tesisatın asıldığı yükseklik)</label><div class="unit" data-u="cm"><input type="number" id="ceilCm" min="150" step="5"></div></div>
-          <span class="src" id="ceilSrc"></span>
-          <div class="cands" id="ceilCands"></div>
-        </div>
-        <div class="meplayers" id="mepLayers"><div class="ml hint">Önce bir çizim açın.</div></div>
-      </section>
+      <!-- MİMARİ: katmanlar ve ölçüler -->
+      <div class="panel" id="pArch" role="tabpanel" hidden>
+        <section class="card-s">
+          <h3>Katmanlar</h3>
+          <p class="hint">Duvar ve kolon katmanları otomatik seçilir. Yanlışsa listeden rolünü değiştirin; model hemen yeniden kurulur.</p>
+          <div class="row">
+            <button class="btn small" id="btnAuto">Otomatik seç</button>
+            <button class="btn small" id="btnRegion">Bölge çiz</button>
+            <button class="btn small" id="btnRegionReset">Bölgeyi sıfırla</button>
+          </div>
+          <div class="row">
+            <input type="search" id="layerFilter" placeholder="Katman ara…" aria-label="Katman ara" style="flex:1;min-width:0">
+            <label class="check"><input type="checkbox" id="onlyAssigned" checked> Yalnız seçilenler</label>
+          </div>
+          <div class="layers"><table><tbody id="layerRows"><tr><td class="hint">Önce bir çizim açın.</td></tr></tbody></table></div>
+        </section>
 
-      <details class="step" id="stepAi">
-        <summary><span class="no">06</span>Yapay zekâ asistanı</summary>
-        <p class="hint">1) Komutu oluşturup kopyalayın. 2) Claude, ChatGPT gibi bir yapay zekâya yapıştırın. 3) Gelen cevabın tamamını aşağıya yapıştırıp uygulayın. Katmanlar, tesisat sınıfları, kotlar, kapı/pencere türleri ve mahal adları ayarlanır; yapay zekânın önerdiği genel kurallar bilgi bankasına eklenir ve sonraki projelerde de kullanılır.</p>
-        <div class="row">
-          <button class="btn small" id="btnPrompt" disabled>Komut oluştur</button>
-          <button class="btn small" id="btnCopy" disabled>Kopyala</button>
-          <button class="btn small" id="btnAsk" hidden>Claude'a doğrudan sor</button>
-        </div>
-        <textarea id="promptOut" readonly placeholder="Komut burada görünecek" aria-label="Yapay zekâ komutu"></textarea>
-        <textarea id="answerIn" placeholder="Yapay zekânın cevabını buraya yapıştırın" aria-label="Yapay zekâ cevabı"></textarea>
-        <div class="row"><button class="btn small primary" id="btnApply" disabled>Cevabı uygula</button></div>
-        <div class="status" id="aiStatus"></div>
-        <div class="kb">
-          <div class="row"><b style="font:600 13px var(--font-ui)">Bilgi bankası</b><span class="hint" id="kbStats"></span></div>
+        <section class="card-s">
+          <h3>Ölçüler</h3>
+          <div class="grid2">
+            <div class="field"><label for="wallHeightCm">Duvar yüksekliği</label><div class="unit" data-u="cm"><input type="number" id="wallHeightCm" min="100" step="5"></div></div>
+            <div class="field"><label for="doorHeightCm">Kapı yüksekliği</label><div class="unit" data-u="cm"><input type="number" id="doorHeightCm" min="100" step="5"></div></div>
+            <div class="field"><label for="windowSillCm">Pencere parapeti</label><div class="unit" data-u="cm"><input type="number" id="windowSillCm" min="0" step="5"></div></div>
+            <div class="field"><label for="windowHeightCm">Pencere yüksekliği</label><div class="unit" data-u="cm"><input type="number" id="windowHeightCm" min="20" step="5"></div></div>
+          </div>
+          <div class="row">
+            <label class="check"><input type="checkbox" id="makeFloor"> Zemin döşemesi</label>
+            <label class="check"><input type="checkbox" id="makeRoof"> Tavan döşemesi</label>
+            <label class="check"><input type="checkbox" id="makeSpaces"> Mahaller</label>
+          </div>
+          <details class="adv">
+            <summary>Proje bilgileri ve gelişmiş ayarlar</summary>
+            <div class="grid2">
+              <div class="field"><label for="projectName">Proje adı</label><input type="text" id="projectName"></div>
+              <div class="field"><label for="storeyName">Kat adı</label><input type="text" id="storeyName"></div>
+              <div class="field"><label for="pUnits">Çizim birimi</label><select class="full" id="pUnits"></select></div>
+              <div class="field"><label for="slabThicknessCm">Döşeme kalınlığı</label><div class="unit" data-u="cm"><input type="number" id="slabThicknessCm" min="0" step="1"></div></div>
+              <div class="field"><label for="minThicknessCm">En ince duvar</label><div class="unit" data-u="cm"><input type="number" id="minThicknessCm" min="1" step="1"></div></div>
+              <div class="field"><label for="maxThicknessCm">En kalın duvar</label><div class="unit" data-u="cm"><input type="number" id="maxThicknessCm" min="5" step="1"></div></div>
+              <div class="field"><label for="minGapCm">En dar boşluk</label><div class="unit" data-u="cm"><input type="number" id="minGapCm" min="10" step="5"></div></div>
+              <div class="field"><label for="maxGapCm">En geniş boşluk</label><div class="unit" data-u="cm"><input type="number" id="maxGapCm" min="50" step="10"></div></div>
+              <div class="field"><label for="maxDoorCm">En geniş iç kapı</label><div class="unit" data-u="cm"><input type="number" id="maxDoorCm" min="50" step="10"></div></div>
+              <div class="field"><label for="tolCm">Birleştirme toleransı</label><div class="unit" data-u="cm"><input type="number" id="tolCm" min="0.1" step="0.1"></div></div>
+            </div>
+            <button class="btn small" id="btnDetect" disabled>Yeniden algıla</button>
+          </details>
+        </section>
+      </div>
+
+      <!-- TESİSAT -->
+      <div class="panel" id="pMep" role="tabpanel" hidden>
+        <section class="card-s">
+          <h3>Asma tavan kotu</h3>
+          <div class="ceil" id="ceilBox">
+            <div class="unit" data-u="cm"><input type="number" id="ceilCm" min="150" step="5" aria-label="Asma tavan kotu (cm)"></div>
+            <span class="src" id="ceilSrc"></span>
+            <div class="cands" id="ceilCands"></div>
+          </div>
+        </section>
+        <section class="card-s">
+          <h3>Sistemler</h3>
+          <div class="row">
+            <label class="check"><input type="checkbox" id="mepOn" checked> Tesisatı göster</label>
+            <label class="check"><input type="checkbox" id="archOn" checked> Mimariyi göster</label>
+          </div>
+          <div class="syschips" id="sysChips"></div>
+        </section>
+        <section class="card-s">
+          <h3>Tesisat katmanları</h3>
+          <p class="hint" id="mepNote"></p>
+          <div class="meplayers" id="mepLayers"><div class="ml hint">Önce bir çizim açın.</div></div>
+        </section>
+      </div>
+
+      <!-- ASİSTAN -->
+      <div class="panel" id="pAi" role="tabpanel" hidden>
+        <section class="card-s" id="stepAi">
+          <h3>Yapay zekâ ile proje analizi</h3>
+          <p class="hint">Program bütün projeyi ve emin olamadığı noktaları yapay zekâya anlatır. Yapay zekâ düzeltebildiklerini düzeltir, bir analiz raporu yazar ve genel kurallar önerir; kurallar bilgi bankasına eklenir, sonraki projelerde aynı soru sorulmaz.</p>
+          <ol class="steps">
+            <li><button class="btn primary" id="btnPrompt" disabled>Analiz komutunu kopyala</button>
+              <button class="btn" id="btnAsk" hidden>Claude ile hemen analiz et</button>
+              <span class="hint">Claude, ChatGPT gibi bir sohbete yapıştırın.</span></li>
+            <li><span class="hint">Gelen cevabın tamamını buraya yapıştırın; kendiliğinden uygulanır.</span>
+              <textarea id="answerIn" placeholder="Yapay zekânın cevabı" aria-label="Yapay zekâ cevabı"></textarea>
+              <button class="btn small" id="btnApply" disabled>Cevabı uygula</button></li>
+          </ol>
+          <div class="status" id="aiStatus"></div>
+          <div id="aiReport"></div>
+          <details class="fold">
+            <summary>Komutun içeriğini göster</summary>
+            <textarea id="promptOut" readonly placeholder="Komut burada görünecek" aria-label="Yapay zekâ komutu"></textarea>
+            <button class="btn small" id="btnCopy" disabled>Tekrar kopyala</button>
+          </details>
+        </section>
+        <section class="card-s kb">
+          <h3>Bilgi bankası</h3>
+          <span class="hint" id="kbStats"></span>
           <ul id="kbList"></ul>
           <div class="row">
             <button class="btn small" id="btnKbExport">Dışa aktar (JSON)</button>
@@ -308,66 +413,53 @@ details.adv[open] .grid2 { margin-top: 8px; }
             <button class="btn small" id="btnKbReset">Öğrenilenleri sil</button>
             <input type="file" id="kbInput" accept=".json,application/json" hidden>
           </div>
-        </div>
-      </details>
-
-      <section class="step" id="stepExport">
-        <h2><span class="no">07</span>Dışa aktar</h2>
-        <button class="btn primary" id="btnExport" disabled>IFC dosyasını indir</button>
-        <p class="note">IFC açık BIM standardıdır (ISO 16739). Revit'te <b>Dosya › Aç › IFC</b> ile açıp <b>Farklı Kaydet › RVT</b> yapılır. FreeCAD ve Blender (Bonsai) ile ücretsiz açılır. Bu sayfada dosya ZIP içinde iner.</p>
-      </section>
-
-      <details class="step rvt" id="stepRvt">
-        <summary><span class="no">08</span>RVT inceleme</summary>
-        <p class="hint">Revit olmadan bir RVT dosyasından okunabilenler: sürüm, önizleme resmi, bağlantılar ve tip adları. 3B geometri kapalı formatta olduğu için okunamaz.</p>
-        <div class="row">
-          <label class="btn small" for="rvtInput">RVT seç</label>
-          <button class="btn small" id="btnRvtSample">Örnek RVT</button>
-          <input type="file" id="rvtInput" accept=".rvt,.rfa,.rte" hidden>
-        </div>
-        <div class="status" id="rvtStatus"></div>
-        <div id="rvtOut"></div>
-      </details>
-
-      <p class="foot">Dosyalar bilgisayarınızdan çıkmaz; bütün işlem tarayıcıda yapılır. Açık kaynak bileşenler: LibreDWG (GPL-3.0), three.js (MIT).</p>
+        </section>
+      </div>
     </aside>
 
     <main>
       <div class="tabs" role="tablist">
         <button class="tab on" role="tab" id="tabPlan" aria-selected="true">Plan</button>
         <button class="tab" role="tab" id="tab3d" aria-selected="false">3B</button>
+        <div class="vtools">
+          <button class="btn small on" id="tglArch" title="Mimariyi göster/gizle">Mimari</button>
+          <button class="btn small on" id="tglMep" title="Tesisatı göster/gizle">Tesisat</button>
+        </div>
         <div class="legend" id="legend2d">
           <span><i class="dot" style="background:var(--wall-ext)"></i>Dış duvar</span>
-          <span><i class="dot" style="background:var(--wall)"></i>İç duvar</span>
           <span><i class="dot" style="background:var(--column)"></i>Kolon</span>
           <span><i class="dot" style="background:var(--win)"></i>Pencere</span>
           <span><i class="dot" style="background:var(--door)"></i>Kapı</span>
-          <span><i class="dot" style="background:var(--empty)"></i>Geçiş</span>
         </div>
       </div>
       <div class="stage">
         <div id="planWrap"><canvas id="plan" aria-label="Kat planı"></canvas>
           <div class="floating">
             <button class="btn small" id="btnFit">Modele odaklan</button>
-            <button class="btn small" id="btnFitAll">Tüm çizim</button>
-            <button class="btn small on" id="btnDim">Çizimi soluk göster</button>
+            <button class="btn small" id="btnFitAll">Tüm pafta</button>
+            <button class="btn small on" id="btnDim">Altlık soluk</button>
             <button class="btn small on" id="btnTexts">Yazılar</button>
           </div>
         </div>
         <div id="view3dWrap" hidden>
           <div class="floating">
             <button class="btn small" id="btnFrame3d">Ortala</button>
-            <button class="btn small" id="btnSpaces">Mahalleri göster</button>
+            <button class="btn small" id="btnSpaces">Mahaller</button>
             <button class="btn small on" id="btnRoof">Tavan</button>
           </div>
         </div>
+        <div class="selcard" id="selCard" hidden>
+          <button class="x" id="selClose" aria-label="Seçimi kapat">×</button>
+          <div id="selPanel"></div>
+        </div>
+        <div class="hintbar" id="hintBar">Bir öğeye tıklayarak türünü ve ölçüsünü değiştirin · Tekerlekle yakınlaştırın · Sürükleyerek kaydırın</div>
         <div class="dlg" id="ceilDlg" hidden>
           <div class="card" role="dialog" aria-labelledby="ceilDlgTitle">
             <b id="ceilDlgTitle">Asma tavan kotu gerekli</b>
             <span class="hint">Projede asma tavan / tesisat kotu bulunamadı. Tavana asılan boru, kanal ve cihazlar bu yüksekliğe yerleştirilecek. Döşemeden itibaren santimetre girin.</span>
             <div class="field"><label for="ceilDlgCm">Asma tavan kotu</label><div class="unit" data-u="cm"><input type="number" id="ceilDlgCm" min="150" step="5" value="280"></div></div>
             <div><div class="hint" id="ceilDlgCandHint">Çizimde geçen kotlar:</div><div class="cands" id="ceilDlgCands"></div></div>
-            <div class="row"><button class="btn primary" id="ceilDlgOk">Uygula</button><button class="btn" id="ceilDlgLater">Şimdilik 280 cm ile devam et</button></div>
+            <div class="row"><button class="btn primary" id="ceilDlgOk">Uygula</button><button class="btn" id="ceilDlgLater">Şimdilik 280 cm</button></div>
           </div>
         </div>
         <div class="overlay" id="overlay"><div class="card"><b>Çizim yükleniyor</b><span class="hint" id="overlayMsg">Örnek proje açılıyor…</span></div></div>
