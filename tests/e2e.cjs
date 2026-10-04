@@ -39,6 +39,10 @@ const { chromium } = require(process.env.PW || 'playwright');
     await page.waitForFunction(() => /lgılandı|bulunamadı|açılamadı|seçilmedi|Okundu/.test(document.getElementById('status').textContent) || !document.getElementById('overlay').hidden && /açılamadı|Hata/.test(document.querySelector('#overlay b').textContent), null, { timeout: 60000 });
     const ov = await page.$eval('#overlay', (o) => (o.hidden ? '' : o.textContent.replace(/\s+/g, ' ')));
     await page.waitForTimeout(800);
+    if (await page.isVisible('#wiz')) {
+      console.log('   analiz ekranı:', (await page.textContent('#wizSummary')).slice(0, 160));
+      await page.click('#wizShow2d');
+    }
     await handleCeil(path.basename(f));
     console.log('   mep note:', await page.textContent('#mepNote'));
     console.log('   systems:', (await page.textContent('#sysChips')).replace(/\s+/g, ' ').trim());

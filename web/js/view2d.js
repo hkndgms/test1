@@ -6,11 +6,12 @@ import { SYSTEMS } from './kb.js';
 const KIND_COLOR = { window: 'win', door: 'door', empty: 'empty', solid: 'wall' };
 
 export class Plan2D {
-  constructor(canvas, { onSelect, onRegion, colors }) {
+  constructor(canvas, { onSelect, onRegion, onWall, colors }) {
     this.cv = canvas;
     this.ctx = canvas.getContext('2d');
     this.onSelect = onSelect;
     this.onRegion = onRegion;
+    this.onWall = onWall;
     this.colors = colors; // () => token renkleri
     this.view = { cx: 0, cy: 0, scale: 1 };
     this.drawing = null;
@@ -212,6 +213,12 @@ export class Plan2D {
       for (const r of this.partRegions) if (r) ctx.strokeRect(r[0], r[1], r[2] - r[0], r[3] - r[1]);
       ctx.setLineDash([]);
     }
+    if (this.wallMode && this._wallStart && this._hover) {
+      world();
+      ctx.strokeStyle = C.accent;
+      ctx.lineWidth = 3 / scale;
+      ctx.beginPath(); ctx.moveTo(...this._wallStart); ctx.lineTo(...this._hover); ctx.stroke();
+    }
     if (this.region) {
       world();
       const [a, b, c, d] = this.region;
@@ -340,6 +347,7 @@ export class Plan2D {
       if (this._pointers.size === 2) this._pinch = this._pinchState();
     });
     cv.addEventListener('pointermove', (e) => {
+      if (this.wallMode && this._wallStart) { const r = cv.getBoundingClientRect(); this._hover = this.toWorld(e.clientX - r.left, e.clientY - r.top); this.draw(); }
       if (!this._pointers.has(e.pointerId)) return;
       const prev = this._pointers.get(e.pointerId);
       this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -374,6 +382,18 @@ export class Plan2D {
       const d = this._drag;
       if (!d || this._pointers.size) return;
       this._drag = null;
+      if (this.wallMode && !d.moved) {
+        // duvar çizimi: iki tıklama (yatay/dikeye yakınsa hizalanır)
+        const r = cv.getBoundingClientRect();
+        let [wx, wy] = this.toWorld(e.clientX - r.left, e.clientY - r.top);
+        if (!this._wallStart) { this._wallStart = [wx, wy]; this.draw(); return; }
+        const [sx, sy] = this._wallStart;
+        if (Math.abs(wx - sx) > Math.abs(wy - sy) * 6) wy = sy; else if (Math.abs(wy - sy) > Math.abs(wx - sx) * 6) wx = sx;
+        this._wallStart = null;
+        this.onWall?.([sx, sy], [wx, wy]);
+        this.draw();
+        return;
+      }
       if (d.region && d.moved) {
         this.regionMode = false;
         this.region = [Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.max(d.x0, d.x1), Math.max(d.y0, d.y1)];

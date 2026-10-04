@@ -217,6 +217,17 @@ ol.steps li { display: grid; gap: 6px; justify-items: start; }
 ol.steps li::marker { font: 600 13px var(--font-mono); color: var(--accent); }
 ol.steps textarea { width: 100%; }
 .vtools { display: flex; gap: 4px; margin-left: 8px; }
+.tourbar { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); width: min(560px, calc(100% - 24px)); background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 12px; display: grid; gap: 8px; z-index: 4; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.tb-text { display: grid; gap: 2px; }
+.touring #view3dWrap .floating, .touring .hintbar { display: none; }
+.tb-text b { font: 700 16px var(--font-head); letter-spacing: .04em; text-transform: uppercase; }
+.tb-text span { font-size: 13px; color: var(--muted); }
+.demobar { position: absolute; left: 12px; right: 12px; top: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: space-between; background: color-mix(in srgb, var(--accent) 12%, var(--panel)); border: 1px solid var(--accent); border-radius: var(--r); padding: 8px 12px; z-index: 4; font-size: 13px; }
+.demobar span { flex: 1; min-width: 220px; }
+.wiz { position: absolute; inset: 0; z-index: 6; background: var(--bg); display: grid; place-items: center; overflow: auto; padding: 16px; }
+.wiz .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 18px 20px; width: min(620px, 100%); display: grid; gap: 10px; }
+.wiz .card > b { font: 700 20px var(--font-head); letter-spacing: .04em; text-transform: uppercase; }
+.wiz textarea { width: 100%; min-height: 110px; }
 .parts { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 300px; overflow: auto; }
 .parts li { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--field); }
 .parts li.on { border-color: var(--accent); background: var(--accent-soft); }
@@ -340,6 +351,11 @@ li.sev-medium i { color: var(--warn) !important; }
             <button class="btn small" id="btnAuto">Otomatik seç</button>
             <button class="btn small" id="btnRegion">Bölge çiz</button>
             <button class="btn small" id="btnRegionReset">Bölgeyi sıfırla</button>
+          </div>
+          <div class="row">
+            <button class="btn small" id="btnWallDraw" title="Çizimde olmayan bir duvarı iki tıklamayla ekleyin">Duvar çiz</button>
+            <label class="hint">kalınlık <input type="number" id="manualWallCm" value="20" min="5" step="5" style="width:56px"> cm</label>
+            <button class="btn small" id="btnWallClear">Elle çizilenleri sil</button>
           </div>
           <div class="row">
             <input type="search" id="layerFilter" placeholder="Katman ara…" aria-label="Katman ara" style="flex:1;min-width:0">
@@ -466,9 +482,42 @@ li.sev-medium i { color: var(--warn) !important; }
         </div>
         <div id="view3dWrap" hidden>
           <div class="floating">
+            <button class="btn small primary" id="btnTour">Otomatik gezi</button>
             <button class="btn small" id="btnFrame3d">Ortala</button>
             <button class="btn small" id="btnSpaces">Mahaller</button>
             <button class="btn small on" id="btnRoof">Tavan</button>
+          </div>
+        </div>
+        <div class="tourbar" id="tourBar" hidden>
+          <div class="tb-text"><b id="tourName">Gezi</b><span id="tourNote"></span></div>
+          <div class="row">
+            <button class="btn small" id="tourPause">Duraklat</button>
+            <button class="btn small" id="tourSpeed" title="Gezi hızı">1×</button>
+            <button class="btn small" id="tourStop">Geziyi bitir</button>
+          </div>
+        </div>
+        <div class="demobar" id="demoBar" hidden>
+          <span><b>Demo</b> · Taziye Evi: yapay zekâ ile düzeltilmiş model ve otomatik gezi. Kendi DWG dosyanızı yükleyince önce analiz yapılır, yapay zekânın cevabı uygulanır, sonra model gösterilir.</span>
+          <div class="row"><label class="btn small primary" for="fileInput">Kendi dosyamı yükle</label><button class="btn small" id="demoClose">Kapat</button></div>
+        </div>
+        <div class="wiz" id="wiz" hidden>
+          <div class="card">
+            <b>Analiz tamamlandı</b>
+            <span class="hint" id="wizSummary"></span>
+            <ul class="diag" id="wizDiag"></ul>
+            <ol class="steps">
+              <li><span>Yapay zekâ projeyi kontrol etsin, düzeltmeleri ve gezi rotasını hazırlasın:</span>
+                <div class="row"><button class="btn primary" id="wizCopy">Komutu kopyala</button><button class="btn" id="wizClaude" hidden>Claude ile otomatik yap</button></div>
+                <span class="hint">Claude, ChatGPT gibi bir sohbete yapıştırın.</span></li>
+              <li><span>Gelen cevabı buraya yapıştırın; düzeltmeler uygulanır:</span>
+                <textarea id="wizAnswer" placeholder="Yapay zekânın cevabı" aria-label="Yapay zekâ cevabı"></textarea></li>
+            </ol>
+            <div class="status" id="wizStatus"></div>
+            <div class="row">
+              <button class="btn primary" id="wizShow3d">3B göster ve gez</button>
+              <button class="btn" id="wizShow2d">2B göster</button>
+              <span class="hint" id="wizSkipHint">Cevap olmadan da gösterebilirsiniz.</span>
+            </div>
           </div>
         </div>
         <div class="selcard" id="selCard" hidden>

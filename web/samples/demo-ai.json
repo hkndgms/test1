@@ -1,0 +1,47 @@
+{
+  "demo": true,
+  "openings": {
+    "O21": { "kind": "door", "heightCm": 220 },
+    "O68": { "kind": "door", "heightCm": 220 },
+    "O64": { "kind": "empty" }
+  },
+  "rooms": {
+    "R14": { "name": "WC" },
+    "R16": { "name": "WC" },
+    "R17": { "name": "WC" },
+    "R20": { "name": "Tesisat şaftı" }
+  },
+  "params": { "wallHeightCm": 320, "doorHeightCm": 220, "windowSillCm": 100, "windowHeightCm": 160 },
+  "ceilingCm": 300,
+  "ceilingReason": "Çatı ve süzgeç kotları +4,50 m civarında; 3,00 m asma tavan kabul edildi",
+  "learn": [
+    { "pattern": "YANGIN[\\s._-]*DOLAB|HYDRANT|\\bFHC\\b", "kind": "equipment", "system": "fire", "elevRef": "floor", "elevOffsetCm": 60, "sizeCm": 90, "note": "Yangın dolabı" },
+    { "pattern": "YANGIN[\\s._-]*YMV|YANGIN[\\s._-]*MUSLU", "kind": "equipment", "system": "fire", "elevRef": "floor", "elevOffsetCm": 0, "sizeCm": 100, "note": "Yangın musluğu / vana grubu" }
+  ],
+  "ignore": [
+    { "pattern": "KOLON[\\s._-]*SEMA|RISER[\\s._-]*DIAGRAM", "reason": "Kolon şeması" }
+  ],
+  "tour": {
+    "order": ["R7", "R13", "R9", "R18", "R15", "R19", "R8", "R4", "R10", "R3", "R1"],
+    "notes": {
+      "R7": "Kadın taziye alanı, yaklaşık 95 m². Batı cephesindeki girişten girilir; uzun cephe boyunca pencereler var.",
+      "R13": "Kadınlar bölümünün mutfak ve çay ocağı.",
+      "R9": "İkinci servis mutfağı; iki taziye alanının ortasında.",
+      "R18": "WC bölümüne açılan koridor.",
+      "R15": "Bebek odası; kuzey girişine yakın, sessiz köşe.",
+      "R19": "Depo ve yemek pişirme alanı; güneydeki geniş servis açıklığına bağlanır.",
+      "R8": "Erkekler bölümünün mutfak ve çay ocağı.",
+      "R4": "Erkek taziye alanı, yaklaşık 199 m². Binanın en büyük mahali; ortada 4 kolon var.",
+      "R10": "Mekanik oda: hidrofor, su deposu ve VRF dış ünite bağlantıları burada.",
+      "R3": "Erkek WC; kabinler doğu cephesi boyunca dizili.",
+      "R1": "Erkek WC girişi."
+    }
+  },
+  "report": "Tek katlı, yaklaşık 31 × 15 m bir taziye evi: biri kadınlara (95 m²), biri erkeklere (199 m²) ayrılmış iki büyük taziye alanı, aralarında servis mutfakları, doğuda WC bloğu ve mekanik oda var. Tesisatta soğuk/sıcak su, pis su, yağmur suyu, VRF klima ve havalandırma sistemleri bulunuyor. Batı ve kuzeydeki 150 cm'lik cephe boşlukları giriş kapısı yapıldı; güneydeki 5,9 m'lik açıklık servis girişi olarak açık bırakıldı.",
+  "issues": [
+    { "severity": "medium", "title": "Batı ve kuzey girişleri", "detail": "150 cm'lik iki dış boşluk kapı yapıldı", "fixed": true },
+    { "severity": "low", "title": "Adsız küçük mahaller", "detail": "WC bloğundaki 4 küçük mahale ad verildi", "fixed": true },
+    { "severity": "low", "title": "Ana erkek girişi", "detail": "Erkek taziye alanının cephesinde belirgin bir giriş kapısı görünmüyor; doğru boşluğu planda tıklayıp kapı yapın", "fixed": false }
+  ],
+  "notes": "Bu cevap demo için önceden hazırlanmıştır."
+}

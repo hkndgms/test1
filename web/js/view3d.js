@@ -44,8 +44,13 @@ export class View3D {
     // Yalnız kamera ya da sahne değişince çiz (pil ve işlemci dostu)
     this._dirty = true;
     this.controls.addEventListener('change', () => { this._dirty = true; });
+    let last = performance.now();
     const loop = () => {
-      if (this.controls.update()) this._dirty = true;
+      const now = performance.now();
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      if (this.tour) { this._tourStep(dt); this._dirty = true; }
+      else if (this.controls.update()) this._dirty = true;
       if (this._dirty && this.el.offsetParent !== null) { this.renderer.render(this.scene, this.camera); this._dirty = false; }
       this._raf = requestAnimationFrame(loop);
     };
@@ -127,6 +132,86 @@ export class View3D {
     this._applySelection();
     if (box.isEmpty()) for (const m of this.meshes) if (m.userData.mep) box.expandByObject(m);
     if (!keepCamera && !box.isEmpty()) this.frame(box);
+  }
+
+  // ------------------------------------------------------------ otomatik gezi
+  // wps: [{x, y, name?, note?, spin?, jump?}] metre cinsinden (yerel koordinat)
+  startTour(wps, { eye = 1.6, speed = 1.3, onStop, onPoint } = {}) {
+    if (!wps || wps.length < 2) return false;
+    this.stopTour(true);
+    this._saved = { pos: this.camera.position.clone(), target: this.controls.target.clone(), near: this.camera.near, fov: this.camera.fov };
+    this.controls.enabled = false;
+    this.camera.near = 0.05;
+    this.camera.fov = 70; // iç mekânda geniş görüş
+    this.camera.updateProjectionMatrix();
+    const p0 = wps[0], p1 = wps[1];
+    this.tour = { wps, i: 0, t: 0, eye, speed, rate: 1, paused: false, spin: 0, yaw: Math.atan2(p1.y - p0.y, p1.x - p0.x), onStop, onPoint };
+    this.camera.position.set(p0.x, p0.y, eye);
+    onPoint?.(p0, 0);
+    return true;
+  }
+
+  pauseTour(v) { if (this.tour) this.tour.paused = v; }
+  setTourRate(r) { if (this.tour) this.tour.rate = r; }
+
+  stopTour(silent = false) {
+    if (!this.tour) return;
+    const cb = this.tour.onStop;
+    this.tour = null;
+    this.controls.enabled = true;
+    if (this._saved) {
+      this.camera.near = this._saved.near;
+      this.camera.fov = this._saved.fov;
+      this.camera.position.copy(this._saved.pos);
+      this.controls.target.copy(this._saved.target);
+      this.camera.updateProjectionMatrix();
+    }
+    this._dirty = true;
+    if (!silent) cb?.();
+  }
+
+  _tourStep(dt) {
+    const T = this.tour;
+    if (T.paused) return this._tourLook(T);
+    dt *= T.rate;
+    const a = T.wps[T.i], b = T.wps[T.i + 1];
+    if (!b) { this.stopTour(); return; }
+    if (T.spin > 0) {
+      // mahal merkezinde yavaş bir çevre bakışı
+      const d = Math.min(T.spin, dt * 1.4);
+      T.yaw += d;
+      T.spin -= d;
+      return this._tourLook(T);
+    }
+    if (b.jump) {
+      T.i++;
+      this.camera.position.set(b.x, b.y, T.eye);
+      T.onPoint?.(b, T.i);
+      return this._tourLook(T);
+    }
+    const L = Math.hypot(b.x - a.x, b.y - a.y);
+    T.t += (dt * T.speed) / Math.max(L, 1e-6);
+    const want = Math.atan2(b.y - a.y, b.x - a.x);
+    let dy = want - T.yaw;
+    while (dy > Math.PI) dy -= 2 * Math.PI;
+    while (dy < -Math.PI) dy += 2 * Math.PI;
+    T.yaw += dy * Math.min(1, dt * 3);
+    if (T.t >= 1) {
+      T.t = 0;
+      T.i++;
+      T.onPoint?.(b, T.i);
+      if (b.spin) T.spin = Math.PI * 2;
+      this.camera.position.set(b.x, b.y, T.eye);
+    } else {
+      this.camera.position.set(a.x + (b.x - a.x) * T.t, a.y + (b.y - a.y) * T.t, T.eye);
+    }
+    this._tourLook(T);
+  }
+
+  _tourLook(T) {
+    const p = this.camera.position;
+    this.camera.up.set(0, 0, 1);
+    this.camera.lookAt(p.x + Math.cos(T.yaw), p.y + Math.sin(T.yaw), T.eye - 0.08);
   }
 
   // Mimari ve tesisat sistemleri için görünürlük

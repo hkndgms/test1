@@ -353,7 +353,10 @@ export function detect(drawing, opts) {
   const minRoom = P.minRoomM2 * 1e4 * k * k;
 
   // Duvarlar
-  const wallSegs = closeOpenEnds(collectSegments(drawing, opts.wallLayers, opts.region), tol, minT * 0.5, maxT, 3 * k + tol);
+  // elle çizilen duvarlar (kullanıcı): dış hatları segment olarak eklenir
+  const extra = [];
+  for (const poly of opts.extraWalls || []) for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; extra.push([a[0], a[1], b[0], b[1]]); }
+  const wallSegs = closeOpenEnds(collectSegments(drawing, opts.wallLayers, opts.region).concat(extra), tol, minT * 0.5, maxT, 3 * k + tol);
   const wf = buildFaces(wallSegs, tol, [minT * 0.5, maxT]);
   const walls = [];
   for (const f of wf.faces) {
@@ -514,7 +517,10 @@ export function detect(drawing, opts) {
   classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm: P.maxDoorCm });
 
   // Mahaller: kapı ve pencere boşlukları kapatılarak
-  const rf = buildFaces(wallSegs.concat(colSegs, closures(openings.filter((o) => o.kind !== 'empty'))), tol, [minT * 0.5, maxT]);
+  // Cam bölmeler / doğrama: duvar katmanında olmayan ama mahalleri ayıran ince elemanlar
+  // (pencere işareti katmanlarındaki çizgiler mahal sınırına katılır)
+  const glassSegs = opts.windowLayers && opts.windowLayers.size ? collectSegments(drawing, opts.windowLayers, opts.region) : [];
+  const rf = buildFaces(wallSegs.concat(colSegs, glassSegs, closures(openings.filter((o) => o.kind !== 'empty'))), tol, [minT * 0.5, maxT]);
   // Mahal adı: kullanıcı yazı katmanı seçtiyse yalnız onlar; seçmediyse tesisat,
   // ölçü vb. katmanlardaki yazılar hariç hepsi (mahal/oda katmanları öncelikli)
   const userText = opts.textLayers && opts.textLayers.size > 0;
@@ -541,7 +547,7 @@ export function detect(drawing, opts) {
   };
 }
 
-const NON_ROOM_TEXT = /^m[-_ ]|hvac|vrf|klima|yang[ıi]n|fire|spr|sprink|elektr|electr|tesisat|sıhhi|sihhi|plumb|daikin|vana|valve|boru|pipe|ölçü|olcu|dim|kot|detail|detay|ata |walky|tefri|mobilya|furn/i;
+const NON_ROOM_TEXT = /y[uü]k\b|load|^m[-_ ]|hvac|vrf|klima|yang[ıi]n|fire|spr|sprink|elektr|electr|tesisat|sıhhi|sihhi|plumb|daikin|vana|valve|boru|pipe|ölçü|olcu|dim|kot|detail|detay|ata |walky|tefri|mobilya|furn/i;
 const ROOM_TEXT = /mahal|room|space|oda|yaz[ıi]|text|txt|anno/i;
 
 
@@ -667,6 +673,7 @@ function distToPoly(x, y, poly) {
 
 function isLabel(s) {
   if (!s || s.length > 40) return false;
+  if (/watt|\bkw\b|q[ct]\.|m³\/h|m3\/h|°c/i.test(s)) return false; // ısı yükü / debi yazıları
   if (/^[\s\d.,+\-=±:%/()]+$/.test(s)) return false; // kot, ölçü vb.
   if (/^(A|S|H|Alan|ALAN)\s*[=:]/.test(s)) return false;
   if (/m²|m2\b/i.test(s) && /\d/.test(s)) return false;

@@ -5,6 +5,14 @@ Sunucu veya bulut gerekmez; dosyalar kullanıcının bilgisayarından çıkmaz.
 
 ## Ne yapar
 
+**Akış:**
+- **İlk açılış:** Bir demo gösterilir. Örnek proje (Taziye Evi) yüklenir, önceden hazırlanmış bir yapay zekâ cevabı (`web/samples/demo-ai.json`) uygulanır ve 3B otomatik gezi başlar.
+- **Kendi dosyanız:** Bir DWG yüklenince model hemen gösterilmez. Önce **analiz ekranı** açılır: program tespitlerini özetler, yapay zekâ komutunu verir; cevap yapıştırılınca düzeltmeler uygulanır, sonra 2B veya 3B gösterilir. claude.ai'de "Claude ile otomatik yap" ile bu adım tek tıktır.
+- **Otomatik gezi:** Göz hizasında (1,6 m) binanın içinde dolaşılır.
+  - Rota mahalleri kapı ve geçişlerden bağlar; girişten başlar, her mahalde çevresine bakar.
+  - Yapay zekâ cevabındaki `tour.order` / `tour.notes` varsa o sıra ve açıklamalar kullanılır.
+  - Duraklat / hız / bitir kontrolleri vardır.
+
 1. **DWG/DXF okur:** LibreDWG'nin WebAssembly sürümü kullanılır. Bloklar açılır, OCS aynalamaları ve yaylar düzeltilir.
 2. **Katmanları eşler:** Duvar ve kolon katmanları otomatik önerilir, elle değiştirilebilir.
 3. **Algılar:**
@@ -16,6 +24,8 @@ Sunucu veya bulut gerekmez; dosyalar kullanıcının bilgisayarından çıkmaz.
      - **pencere:** cam/doğrama çizgisi boşluğu kesiyorsa ya da boşlukla sınırlı paralel cam/denizlik çizgileri varsa;
      - **kanıt yoksa:** dar dış boşluk dolu, geniş dış boşluk geçiş sayılır.
      Her kararın gerekçesi seçim kartında gösterilir.
+   - **Cam bölmeler:** Pencere işareti katmanlarındaki (cam, doğrama) çizgiler mahal sınırına katılır.
+   - **Elle duvar çizme:** Çizimde olmayan bir duvar Mimari sekmesindeki **Duvar çiz** aracıyla iki tıklamada eklenir; mahaller yeniden hesaplanır.
    - **Açık uç onarımı:** Açık kalan duvar uçları kapatılır. Bu, kayık biten çizgilerde ve sıva + yalıtım + gövdesi ayrı çizilmiş çok katmanlı duvarlarda da çalışır. Birkaç cm kala biten çizgiler karşı duvara uzatılır.
    - **Mahaller:** odalar, adları ve alanlarıyla.
    - **Bina dış hattı.**
@@ -56,6 +66,8 @@ web/                  uygulama (derleme adımı yok, doğrudan yayınlanır)
   js/auto.js          asıl plan, katman rolleri ve birim tahmini
   js/kb.js            bilgi bankası: tesisat sistemleri, yerleşik/öğrenilmiş kurallar
   js/mep.js           tesisat çıkarımı ve kot tespiti
+  js/tour.js          otomatik gezi rotası (mahaller + kapılar)
+  js/diagnose.js      programın tespit ettiği sorunlar (yapay zekâ analizine gider)
   vendor/             libredwg-web 0.7.14 (GPL-3.0), three.js 0.180 (MIT)
   samples/            örnek DWG ve RVT
 ornek-dosyalar/       özgün örnek dosyalar

@@ -65,6 +65,9 @@ MEKANİK TESİSAT (asıl önem burada)
 - "ceilingCm": asma tavan kotu (cm) — yalnız çizimden makul bir çıkarım yapabiliyorsan; "ceilingReason" ile gerekçesini yaz. Emin değilsen yazma, uygulama kullanıcıya soracak.
 - "questions": bu katmanlardan emin olamadıkların için kullanıcıya sorulacak kısa sorular (en çok 3).
 
+OTOMATİK GEZİ
+- "tour": binanın içinde göz hizasında yapılacak otomatik gezi için mahal sırası ve her mahal için 1-2 cümlelik Türkçe açıklama: {"order": ["R7","R13",...], "notes": {"R7": "..."}}. Girişe yakın mahalden başla, komşu mahallerden geçerek mantıklı bir sırayla her önemli mahali gez; 3 m²'den küçük mahalleri atlayabilirsin.
+
 ANALİZ ÇIKTISI
 - "report": projenin 3-6 cümlelik özeti (ne tür bir yapı, hangi tesisat sistemleri var, modelin güvenilirliği, kullanıcının dikkat etmesi gerekenler). Türkçe yaz.
 - "issues": [{"severity":"high|medium|low","title":"kısa başlık","detail":"ne yapılmalı","fixed":true|false}] — fixed=true: bu cevaptaki alanlarla düzelttin; false: kullanıcının yapması gerekiyor.
@@ -86,6 +89,7 @@ ANALİZ ÇIKTISI
   "ignore": [ { "pattern": "KOLON[\\s._-]*SEMA|RISER[\\s._-]*DIAGRAM", "reason": "kolon şeması" } ],
   "ceilingCm": 290, "ceilingReason": "...",
   "questions": ["..."],
+  "tour": { "order": ["R1", "R2"], "notes": { "R1": "..." } },
   "report": "...",
   "issues": [ { "severity": "medium", "title": "...", "detail": "...", "fixed": false } ],
   "notes": "kısa açıklama"

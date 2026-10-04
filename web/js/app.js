@@ -12,10 +12,12 @@ import { Plan2D, findById, findMepById } from './view2d.js';
 import { buildPrompt, parseAnswer } from './ai-prompt.js';
 import { readRvt } from './rvt.js';
 import { diagnose, SEV_LABEL } from './diagnose.js';
+import { planTour } from './tour.js';
 
 const $ = (id) => document.getElementById(id);
 const SAMPLE_DWG = 'samples/taziye-evi.dwg.b64.txt';
 const SAMPLE_RVT = 'samples/taziye-evi.rvt.b64.txt';
+const DEMO_AI = 'samples/demo-ai.json';
 
 const state = {
   drawing: null,
@@ -86,6 +88,7 @@ function overlay(msg, title = 'Çizim yükleniyor') {
 const plan = new Plan2D($('plan'), {
   colors: themeColors,
   onSelect: (id) => select(id),
+  onWall: (a, b) => addManualWall(a, b),
   onRegion: (r) => { state.region = r; $('btnRegion').classList.remove('on'); status('Bölge seçildi, yeniden algılanıyor…'); runDetect(); },
 });
 
@@ -103,6 +106,7 @@ async function ensure3d() {
 }
 
 function showTab(t) {
+  if (t !== '3d') stopTour();
   state.tab = t;
   $('tabPlan').classList.toggle('on', t === 'plan');
   $('tab3d').classList.toggle('on', t === '3d');
@@ -132,9 +136,12 @@ function getWorker() {
   return worker;
 }
 
-function loadBuffer(buf, name) {
+function loadBuffer(buf, name, { sample = false } = {}) {
   const isDxf = /\.dxf$/i.test(name);
+  state.isSample = sample;
   state.fileName = name;
+  stopTour();
+  $('demoBar').hidden = true;
   $('fileChip').textContent = name;
   overlay('Okuyucu hazırlanıyor…');
   status('Dosya okunuyor…');
@@ -157,7 +164,7 @@ function loadBuffer(buf, name) {
 async function loadSample() {
   try {
     overlay('Örnek proje indiriliyor (6 MB)…');
-    loadBuffer(await fetchSample(SAMPLE_DWG), 'ÖRNEK · 03.10.2026_TAZIYE_EVI_MEKANIK_PROJE.dwg');
+    loadBuffer(await fetchSample(SAMPLE_DWG), 'ÖRNEK · 03.10.2026_TAZIYE_EVI_MEKANIK_PROJE.dwg', { sample: true });
   } catch (e) {
     overlay('Örnek dosya indirilemedi (' + e.message + '). Kendi DWG dosyanızı açabilirsiniz.', 'Örnek açılamadı');
   }
@@ -168,11 +175,15 @@ function onDrawing(d, secs) {
   state.units = UNIT_TO_CM[d.units] != null && d.units !== 0 ? d.units : 5;
   state.region = null;
   state.mepOverrides = {};
+  state.manualWalls = [];
   state.systemsOff = new Set();
   state.elevations = null;
   state.ceiling = { cm: 280, source: 'default', text: '' };
   state.ceilingAsked = false;
   state.aiReport = null;
+  state.aiTour = null;
+  // kendi dosyası: model gösterilmeden önce analiz + yapay zekâ ekranı
+  state.wizardActive = !state.isSample;
   renderReport();
   $('ceilDlg').hidden = true;
   plan.setDrawing(d);
@@ -187,7 +198,111 @@ function onDrawing(d, secs) {
     const ign = state.islands?.length > 1 ? ` ${state.islands.length - 1} ayrık çizim grubu yok sayıldı.` : '';
     status(`Okundu (${secs} sn) ve algılandı.${ign} ${state.unitNote || 'Plandaki öğelere tıklayarak düzenleyebilirsiniz.'}`, 'ok');
   }
+  if (state.isSample && !state.demoDone) runDemo();
+  else if (state.wizardActive) openWizard();
 }
+
+// ------------------------------------------------------------ açılış demosu
+// Örnek proje + önceden hazırlanmış bir yapay zekâ cevabı + otomatik gezi
+async function runDemo() {
+  state.demoDone = true;
+  try {
+    const r = await fetch(DEMO_AI);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    applyAnswer(await r.json());
+    aiStatus('Demo: önceden hazırlanmış yapay zekâ cevabı uygulandı.', 'ok');
+  } catch (e) {
+    console.warn('demo cevabı yüklenemedi', e);
+  }
+  $('demoBar').hidden = false;
+  showTab('3d');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (!reduce) setTimeout(() => startTour(), 900);
+}
+$('demoClose').onclick = () => { $('demoBar').hidden = true; stopTour(); };
+
+// ------------------------------------------------------------ analiz + yapay zekâ ekranı
+function openWizard() {
+  const m = state.model;
+  const ops = m.openings.filter((o) => !state.overrides[o.id]?.deleted);
+  const k = (x) => ops.filter((o) => (state.overrides[o.id]?.kind || o.kind) === x).length;
+  const sum = mepSummary();
+  const mepTxt = [...sum.entries()].map(([s, v]) => `${(SYSTEMS[s] || SYSTEMS.other).label}${v.pipeM ? ' ' + v.pipeM.toFixed(0) + ' m' : ''}${v.n ? ' ' + v.n + ' ad.' : ''}`).join(', ');
+  $('wizSummary').textContent = `${state.fileName}: ${m.walls.length} duvar, ${m.columns.length} kolon, ${k('door')} kapı, ${k('window')} pencere, ${m.rooms.length} mahal` + (mepTxt ? `; tesisat: ${mepTxt}` : '') + '. Program aşağıdaki noktalardan emin değil:';
+  const diag = diagnose(state);
+  $('wizDiag').innerHTML = diag.slice(0, 7).map((x) => `<li class="sev-${x.severity}"><i>${SEV_LABEL[x.severity]}</i> ${esc(x.text)}</li>`).join('') || '<li>Belirgin bir sorun bulunmadı; yine de yapay zekâ gezi rotası ve kontrol için kullanılabilir.</li>';
+  $('wizAnswer').value = '';
+  setStatus($('wizStatus'), '');
+  $('wizSkipHint').textContent = 'Cevap olmadan da gösterebilirsiniz.';
+  $('wiz').hidden = false;
+}
+function closeWizard() {
+  $('wiz').hidden = true;
+  state.wizardActive = false;
+  if (mepCount() && state.ceiling.source === 'default' && !state.ceilingAsked) askCeiling();
+}
+$('wizCopy').onclick = () => {
+  const t = $('promptOut');
+  t.value = currentPrompt();
+  $('btnCopy').disabled = false;
+  navigator.clipboard.writeText(t.value).then(
+    () => setStatus($('wizStatus'), 'Komut kopyalandı. Bir yapay zekâ sohbetine yapıştırın, cevabı aşağıya yapıştırın.', 'ok'),
+    () => { $('wizAnswer').value = ''; setStatus($('wizStatus'), 'Otomatik kopyalanamadı. Asistan sekmesindeki "Komutun içeriğini göster" bölümünden kopyalayın.', 'err'); },
+  );
+};
+$('wizAnswer').addEventListener('paste', () => setTimeout(() => {
+  const txt = $('wizAnswer').value;
+  if (!/\{[\s\S]*\}/.test(txt)) return;
+  $('answerIn').value = txt;
+  applyAnswer();
+  setStatus($('wizStatus'), $('aiStatus').textContent, $('aiStatus').className.includes('err') ? 'err' : 'ok');
+  $('wizSkipHint').textContent = 'Düzeltmeler uygulandı; modeli gösterebilirsiniz.';
+}, 0));
+$('wizShow3d').onclick = () => { closeWizard(); showTab('3d'); setTimeout(() => startTour(), 600); };
+$('wizShow2d').onclick = () => { closeWizard(); showTab('plan'); plan.fitModel(); };
+
+// ------------------------------------------------------------ otomatik gezi
+async function startTour() {
+  if (!state.model) return;
+  const v = await ensure3d();
+  if (!v) return;
+  const wps = planTour(state.model, state.overrides, state.aiTour || {});
+  if (wps.length < 2) { status('Otomatik gezi için yeterli mahal bulunamadı.', 'err'); return; }
+  const b = buildAll();
+  const [ox, oy] = b.origin;
+  const sc = b.scale;
+  const m = wps.map((p) => ({ ...p, x: (p.x - ox) * sc, y: (p.y - oy) * sc }));
+  v.setShowRoof(false);
+  $('btnRoof').classList.remove('on');
+  const ok = v.startTour(m, {
+    onPoint: (p) => { if (p.name) { $('tourName').textContent = p.name; $('tourNote').textContent = p.note || ''; } },
+    onStop: () => { $('tourBar').hidden = true; document.querySelector('.stage').classList.remove('touring'); },
+  });
+  if (!ok) return;
+  $('tourName').textContent = m[0].name || 'Gezi başlıyor';
+  $('tourNote').textContent = state.aiTour ? 'Rota yapay zekânın önerdiği sırayla.' : 'Rota program tarafından mahaller ve kapılar üzerinden hesaplandı.';
+  $('tourPause').textContent = 'Duraklat';
+  $('tourSpeed').textContent = '1×';
+  $('tourBar').hidden = false;
+  document.querySelector('.stage').classList.add('touring');
+}
+function stopTour() { state.view3d?.stopTour(true); $('tourBar').hidden = true; document.querySelector('.stage').classList.remove('touring'); }
+$('btnTour').onclick = () => startTour();
+$('tourStop').onclick = () => stopTour();
+$('tourPause').onclick = () => {
+  const v = state.view3d;
+  if (!v?.tour) return;
+  const p = !v.tour.paused;
+  v.pauseTour(p);
+  $('tourPause').textContent = p ? 'Devam' : 'Duraklat';
+};
+$('tourSpeed').onclick = () => {
+  const v = state.view3d;
+  if (!v?.tour) return;
+  const r = v.tour.rate >= 4 ? 1 : v.tour.rate * 2;
+  v.setTourRate(r);
+  $('tourSpeed').textContent = r + '×';
+};
 
 function renderFacts(secs) {
   const d = state.drawing;
@@ -384,6 +499,24 @@ $('btnRegion').onclick = () => {
 };
 $('btnRegionReset').onclick = () => { state.region = null; runDetect(); };
 
+// ------------------------------------------------------------ elle duvar çizme
+function addManualWall(a, b) {
+  const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (L < 1e-6) return;
+  const t = (parseFloat($('manualWallCm').value) || 20) / (UNIT_TO_CM[state.units] ?? 1);
+  const nx = -(b[1] - a[1]) / L * t / 2, ny = (b[0] - a[0]) / L * t / 2;
+  state.manualWalls.push([[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]]);
+  runDetect();
+  status(`Duvar eklendi (${state.manualWalls.length} elle çizilmiş duvar). Mahaller yeniden hesaplandı.`, 'ok');
+}
+$('btnWallDraw').onclick = () => {
+  plan.wallMode = !plan.wallMode;
+  plan._wallStart = null;
+  $('btnWallDraw').classList.toggle('on', plan.wallMode);
+  if (plan.wallMode) { showTab('plan'); status('Duvarın başlangıç ve bitiş noktasına tıklayın. Bitirmek için "Duvar çiz" düğmesine tekrar basın.'); }
+};
+$('btnWallClear').onclick = () => { if (!state.manualWalls?.length) return; state.manualWalls = []; runDetect(); status('Elle çizilen duvarlar silindi.', 'ok'); };
+
 // ------------------------------------------------------------ parametreler
 const DETECT_KEYS = ['minThicknessCm', 'maxThicknessCm', 'minGapCm', 'maxGapCm', 'maxDoorCm', 'tolCm'];
 const BUILD_NUM = ['wallHeightCm', 'doorHeightCm', 'windowSillCm', 'windowHeightCm', 'slabThicknessCm'];
@@ -443,6 +576,7 @@ function runDetect() {
   state.model = state.roles.wall.size ? mergeModels(regions.map((region) => detect(state.drawing, {
     units: state.units, wallLayers: state.roles.wall, columnLayers: state.roles.column,
     textLayers: state.roles.text, doorLayers: state.roles.door, windowLayers: state.roles.window, region, params: state.params,
+    extraWalls: state.manualWalls,
   }))) : emptyModel();
   state.overrides = {};
   state.selected = null;
@@ -508,7 +642,7 @@ function runMep(rebuild = true) {
   renderMepPanel();
   renderTodo();
   renderReport();
-  if (mepCount() && state.ceiling.source === 'default' && !state.ceilingAsked) askCeiling();
+  if (mepCount() && state.ceiling.source === 'default' && !state.ceilingAsked && !state.wizardActive && !(state.isSample && !state.demoDone)) askCeiling();
   if (rebuild) rebuild3d();
 }
 
@@ -979,11 +1113,31 @@ capSample.then((sample) => {
       aiStatus(e?.code === 'not_granted' ? 'Claude erişimine izin verilmedi.' : 'Claude cevap veremedi: ' + (e?.message || e?.code), 'err');
     } finally { b.disabled = false; }
   };
+  // analiz ekranında: Claude'a sor, uygula, 3B göster ve gez
+  const w = $('wizClaude');
+  w.hidden = false;
+  w.onclick = async () => {
+    if (!state.drawing) return;
+    w.disabled = true;
+    setStatus($('wizStatus'), 'Claude projeyi analiz ediyor… (yarım dakika kadar sürebilir)');
+    try {
+      const prompt = currentPrompt();
+      $('promptOut').value = prompt;
+      const r = await sample(prompt, { onText: ({ text }) => { $('wizAnswer').value = text; } });
+      $('wizAnswer').value = r.text;
+      $('answerIn').value = r.text;
+      applyAnswer();
+      setStatus($('wizStatus'), $('aiStatus').textContent, 'ok');
+      $('wizShow3d').click();
+    } catch (e) {
+      setStatus($('wizStatus'), e?.code === 'not_granted' ? 'Claude erişimine izin verilmedi; komutu kopyalayıp kendiniz sorabilirsiniz.' : 'Claude cevap veremedi: ' + (e?.message || e?.code), 'err');
+    } finally { w.disabled = false; }
+  };
 });
 
-function applyAnswer() {
-  let a;
-  try { a = parseAnswer($('answerIn').value); } catch (e) { aiStatus(e.message, 'err'); return; }
+function applyAnswer(given) {
+  let a = given && typeof given === 'object' && !(given instanceof Event) ? given : null;
+  if (!a) { try { a = parseAnswer($('answerIn').value); } catch (e) { aiStatus(e.message, 'err'); return; } }
   const d = state.drawing;
   const byName = new Map(d.layers.map((l, i) => [l.name.toLocaleLowerCase('tr'), i]));
   const done = [];
@@ -1065,6 +1219,10 @@ function applyAnswer() {
   renderStats();
   rebuild3d();
   renderSel();
+  if (a.tour && (Array.isArray(a.tour.order) || a.tour.notes)) {
+    state.aiTour = { order: Array.isArray(a.tour.order) ? a.tour.order.map(String) : null, notes: a.tour.notes && typeof a.tour.notes === 'object' ? a.tour.notes : {} };
+    done.push('gezi rotası');
+  }
   if (a.report || Array.isArray(a.issues)) {
     state.aiReport = { report: String(a.report || ''), issues: (Array.isArray(a.issues) ? a.issues : []).slice(0, 20) };
     renderReport();
@@ -1078,7 +1236,7 @@ function applyAnswer() {
   if (a.notes) msg += ' Not: ' + a.notes;
   aiStatus(msg, done.length ? 'ok' : 'err');
 }
-$('btnApply').onclick = applyAnswer;
+$('btnApply').onclick = () => applyAnswer();
 
 // ------------------------------------------------------------ RVT inceleme
 const rvtStatus = (m, k) => setStatus($('rvtStatus'), m, k);
