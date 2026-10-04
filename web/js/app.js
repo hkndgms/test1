@@ -16,7 +16,7 @@ const state = {
   drawing: null,
   fileName: '',
   units: 5,
-  roles: { wall: new Set(), column: new Set(), text: new Set() },
+  roles: { wall: new Set(), column: new Set(), text: new Set(), door: new Set(), window: new Set() },
   region: null,
   autoRegion: null,
   params: { ...DEFAULT_PARAMS },
@@ -101,9 +101,13 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', themeChang
 new MutationObserver(themeChanged).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 
 // ------------------------------------------------------------ dosya okuma
+// Her dosya için yeni bir işçi (ve yeni bir WebAssembly örneği) başlatılır:
+// libredwg-web aynı örnekte ikinci bir dosyayı okurken (ör. 2007 sonrası 2010+)
+// "function signature mismatch" ile çöküyor. .wasm tarayıcı önbelleğinden gelir.
 let worker = null;
 function getWorker() {
-  if (!worker) worker = new Worker(new URL('./dwg-worker.js', import.meta.url), { type: 'module' });
+  if (worker) worker.terminate();
+  worker = new Worker(new URL('./dwg-worker.js', import.meta.url), { type: 'module' });
   return worker;
 }
 
@@ -150,7 +154,7 @@ function onDrawing(d, secs) {
   runDetect();
   plan.fitModel();
   overlay(null);
-  if (state.model?.walls.length) status(`Okundu (${secs} sn) ve algılandı. Plandaki öğelere tıklayarak düzenleyebilirsiniz.`, 'ok');
+  if (state.model?.walls.length) status(`Okundu (${secs} sn) ve algılandı. ${state.unitNote || 'Plandaki öğelere tıklayarak düzenleyebilirsiniz.'}`, 'ok');
 }
 
 function renderFacts(secs) {
@@ -184,7 +188,10 @@ drop.addEventListener('drop', async (e) => {
 
 // ------------------------------------------------------------ katman rolleri
 const WALL_RE = /duvar|wall|perde/i;
-const COL_RE = /beton|kolon|column|colm|struct|tasiyici|taşıyıcı/i;
+const COL_RE = /beton|kolon|column|colm|struct|strukt|tasiyici|taşıyıcı/i;
+const DOOR_RE = /kap[ıi]|door|\bdr\b/i;
+const WIN_RE = /pencere|window|wndw|glaz/i;
+const SKIP_MARK_RE = /^m[-_]|hvac|vrf|yazi|yazı|text|tag|etiket/i;
 const SKIP_RE = /^m[-_]|hvac|vrf|tesisat|walky|tefri|tarama|hatch|olcu|ölçü|dim|yazi|yazı|text/i;
 
 function layerBBox(set) {
@@ -201,36 +208,60 @@ function layerBBox(set) {
   return [a - m, b - m, c + m, d + m];
 }
 
+// Bir algılama sonucunun "gerçek bir binaya" ne kadar benzediği
+function modelScore(m) {
+  if (m.walls.length < 3) return 0;
+  const s2 = m.unitScale ** 2 / 1e4;
+  const rooms = m.rooms.filter((r) => { const a = Math.abs(r.area) * s2; return a >= 1 && a <= 1000; });
+  return 0.5 * m.walls.length + 2 * m.walls.filter((w) => w.exterior).length + 5 * rooms.length + 5 * rooms.filter((r) => r.name).length;
+}
+
+// Katman rollerini ve gerekirse çizim birimini tahmin eder. Birim: dosyadaki
+// INSUNITS çoğu zaman yanlıştır (ör. cm ile çizilip "mm" kaydedilmiş); bu yüzden
+// mm / cm / m ile de denenir, beyan edilen birime küçük bir öncelik verilir.
 function autoRoles() {
   const d = state.drawing;
-  const k = 1 / (UNIT_TO_CM[state.units] ?? 1);
-  const tol = state.params.tolCm * k;
-  const cands = d.layers.map((l, i) => ({ l, i })).filter(({ l }) => l.count > 0 && WALL_RE.test(l.name) && !SKIP_RE.test(l.name));
-  // Her aday katmanla gerçek algılama yap; bir binayı en iyi tarif edeni seç
-  // (mahal, adlı mahal ve dış duvar sayısı ağır basar). Çok kalabalık katmanlar
-  // genellikle bütün paftaya dağılmış detaylardır; yalnızca yedek olarak bakılır.
+  const declared = state.units;
+  const units = [declared, ...[4, 5, 6].filter((u) => u !== declared)];
+  let cands = d.layers.map((l, i) => ({ l, i })).filter(({ l }) => l.count > 0 && WALL_RE.test(l.name) && !SKIP_RE.test(l.name));
+  const fallback = !cands.length;
+  if (fallback) {
+    // adında duvar geçen katman yoksa en kalabalık (tesisat/yazı olmayan) katmanları dene
+    cands = d.layers.map((l, i) => ({ l, i })).filter(({ l }) => l.count > 0 && !SKIP_RE.test(l.name) && !/^(0|defpoints)$/i.test(l.name))
+      .sort((a, b) => b.l.count - a.l.count).slice(0, 12);
+  }
   let best = null;
-  const big = [];
   for (const c of cands) {
-    const segs = collectSegments(d, new Set([c.i]), null);
-    if (segs.length > 20000) { big.push({ c, n: segs.length }); continue; }
     const set = new Set([c.i]);
-    const m = detect(d, { units: state.units, wallLayers: set, columnLayers: new Set(), region: layerBBox(set), params: state.params });
-    const score = 10 * m.rooms.length + 10 * m.rooms.filter((r) => r.name).length + 2 * m.walls.filter((w) => w.exterior).length + 0.5 * m.walls.length;
-    if (score > 0 && (!best || score > best.score)) best = { i: c.i, score };
+    if (collectSegments(d, set, null).length > 20000) continue;
+    const region = layerBBox(set);
+    for (const u of units) {
+      const m = detect(d, { units: u, wallLayers: set, columnLayers: new Set(), region, params: state.params });
+      const score = modelScore(m) * (u === declared ? 1.15 : 1);
+      if (score > 0 && (!best || score > best.score)) best = { i: c.i, u, score };
+    }
   }
-  if (!best && big.length) {
-    big.sort((a, b) => a.n - b.n);
-    const f = buildFaces(collectSegments(d, new Set([big[0].c.i]), null), tol, [state.params.minThicknessCm * k * 0.5, state.params.maxThicknessCm * k]);
-    if (f.faces.some((x) => x.area > 0)) best = { i: big[0].c.i, score: 1 };
+  state.unitNote = '';
+  if (best && best.u !== declared) {
+    state.unitNote = `Dosyada birim "${UNIT_NAMES[declared] || '?'}" yazıyor ama ölçüler ${UNIT_NAMES[best.u]} ile tutarlı; ${UNIT_NAMES[best.u]} kullanıldı. Gerekirse Ölçüler › Çizim birimi'nden değiştirin.`;
+    state.units = best.u;
+    fillParams();
   }
-  state.roles = { wall: new Set(best ? [best.i] : []), column: new Set(), text: new Set() };
+  state.roles = { wall: new Set(best ? [best.i] : []), column: new Set(), text: new Set(), door: new Set(), window: new Set() };
+  // Kapı / pencere işaret katmanları adlarından
+  d.layers.forEach((l, i) => {
+    if (!l.count || state.roles.wall.has(i) || SKIP_MARK_RE.test(l.name)) return;
+    if (DOOR_RE.test(l.name)) state.roles.door.add(i);
+    else if (WIN_RE.test(l.name)) state.roles.window.add(i);
+  });
   state.autoRegion = best ? layerBBox(state.roles.wall) : null;
   if (best) {
     let bc = null;
     for (const { l, i } of d.layers.map((l, i) => ({ l, i }))) {
-      if (!l.count || !COL_RE.test(l.name) || /tarama|hatch/i.test(l.name)) continue;
-      const m = detect(d, { units: state.units, wallLayers: new Set(), columnLayers: new Set([i]), region: state.autoRegion, params: state.params });
+      if (!l.count || !COL_RE.test(l.name) || /tarama|hatch|[-_ ]trm[-_ ]/i.test(l.name)) continue;
+      const set = new Set([i]);
+      if (collectSegments(d, set, state.autoRegion).length > 20000) continue;
+      const m = detect(d, { units: state.units, wallLayers: new Set(), columnLayers: set, region: state.autoRegion, params: state.params });
       if (!bc || m.columns.length > bc.n) bc = { i, n: m.columns.length };
     }
     if (bc && bc.n > 0) state.roles.column.add(bc.i);
@@ -238,7 +269,8 @@ function autoRoles() {
 }
 
 function roleOf(i) {
-  return state.roles.wall.has(i) ? 'wall' : state.roles.column.has(i) ? 'column' : state.roles.text.has(i) ? 'text' : '';
+  for (const r of ['wall', 'column', 'door', 'window', 'text']) if (state.roles[r].has(i)) return r;
+  return '';
 }
 
 function renderLayers() {
@@ -255,6 +287,8 @@ function renderLayers() {
         <option value="">—</option>
         <option value="wall" ${roleOf(i) === 'wall' ? 'selected' : ''}>Duvar</option>
         <option value="column" ${roleOf(i) === 'column' ? 'selected' : ''}>Kolon</option>
+        <option value="door" ${roleOf(i) === 'door' ? 'selected' : ''}>Kapı işareti</option>
+        <option value="window" ${roleOf(i) === 'window' ? 'selected' : ''}>Pencere işareti</option>
         <option value="text" ${roleOf(i) === 'text' ? 'selected' : ''}>Mahal adı</option>
       </select></td>
     </tr>`).join('');
@@ -278,7 +312,7 @@ function applyLayerFilter() {
   for (const tr of $('layerRows').querySelectorAll('tr[data-i]')) tr.hidden = q && !tr.dataset.name.includes(q);
 }
 $('layerFilter').oninput = applyLayerFilter;
-$('btnAuto').onclick = () => { if (!state.drawing) return; autoRoles(); state.region = null; renderLayers(); runDetect(); plan.fitModel(); };
+$('btnAuto').onclick = () => { if (!state.drawing) return; state.units = UNIT_TO_CM[state.drawing.units] != null && state.drawing.units !== 0 ? state.drawing.units : 5; autoRoles(); state.region = null; renderLayers(); runDetect(); plan.fitModel(); };
 $('btnRegion').onclick = () => {
   if (!state.drawing) return;
   plan.regionMode = !plan.regionMode;
@@ -323,7 +357,7 @@ function runDetect() {
   plan.region = state.region;
   state.model = detect(state.drawing, {
     units: state.units, wallLayers: state.roles.wall, columnLayers: state.roles.column,
-    textLayers: state.roles.text, region, params: state.params,
+    textLayers: state.roles.text, doorLayers: state.roles.door, windowLayers: state.roles.window, region, params: state.params,
   });
   state.overrides = {};
   state.selected = null;
@@ -518,7 +552,7 @@ function applyAnswer() {
   const missing = [];
   let redetect = false, layersChanged = false;
   if (a.layers && typeof a.layers === 'object') {
-    for (const [key, role] of [['walls', 'wall'], ['columns', 'column'], ['texts', 'text']]) {
+    for (const [key, role] of [['walls', 'wall'], ['columns', 'column'], ['texts', 'text'], ['doors', 'door'], ['windows', 'window']]) {
       if (!Array.isArray(a.layers[key])) continue;
       const set = new Set();
       for (const n of a.layers[key]) {

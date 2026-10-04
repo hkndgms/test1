@@ -89,9 +89,11 @@ details.step:not([open]) { gap: 0; }
 .layers tr.role-wall { background: color-mix(in srgb, var(--wall-ext) 12%, transparent); }
 .layers tr.role-column { background: color-mix(in srgb, var(--column) 14%, transparent); }
 .layers tr.role-text { background: var(--room); }
-.layers td.nm { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.layers tr.role-door { background: color-mix(in srgb, var(--door) 18%, transparent); }
+.layers tr.role-window { background: color-mix(in srgb, var(--win) 18%, transparent); }
+.layers td.nm { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
 .layers td.ct { font: 11px var(--font-mono); color: var(--muted); text-align: right; }
-.layers select { font-size: 12px; padding: 1px 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--field); }
+.layers select { font-size: 12px; padding: 1px 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--field); max-width: 104px; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--line); vertical-align: middle; }
 input[type="search"], input[type="text"], input[type="number"], select.full, textarea { width: 100%; border: 1px solid var(--line); border-radius: var(--r); background: var(--field); padding: 6px 8px; }
 textarea { font: 12px/1.45 var(--font-mono); resize: vertical; min-height: 90px; }
@@ -181,7 +183,7 @@ details.adv[open] .grid2 { margin-top: 8px; }
 
       <section class="step" id="stepLayers">
         <h2><span class="no">02</span>Katmanlar</h2>
-        <p class="hint">Duvar ve kolon katmanlarını seçin. Algılama, seçilen katmanlardaki çizgilerden yapılır. Göz işareti yalnızca görünürlüğü değiştirir.</p>
+        <p class="hint">Duvar ve kolon katmanlarını seçin. Kapı/pencere işareti katmanları (açılış yayı, doğrama) boşluğun türünü belirler. Göz işareti yalnızca görünürlüğü değiştirir.</p>
         <div class="row">
           <button class="btn small" id="btnAuto">Otomatik seç</button>
           <button class="btn small" id="btnRegion">Bölge çiz</button>

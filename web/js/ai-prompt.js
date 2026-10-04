@@ -10,7 +10,7 @@ export function buildPrompt({ drawing, roles, params, buildParams, model, fileNa
     .sort((a, b) => b.count - a.count)
     .slice(0, 150)
     .map((l) => {
-      const r = roles.wall.has(l.i) ? 'DUVAR' : roles.column.has(l.i) ? 'KOLON' : roles.text.has(l.i) ? 'YAZI' : '-';
+      const r = roles.wall.has(l.i) ? 'DUVAR' : roles.column.has(l.i) ? 'KOLON' : roles.door?.has(l.i) ? 'KAPI' : roles.window?.has(l.i) ? 'PENCERE' : roles.text.has(l.i) ? 'YAZI' : '-';
       return `${l.name}\t${l.count}\t${r}`;
     });
   const texts = [...new Set(drawing.texts.filter((t) => t.s.length > 2 && t.s.length < 40 && /\p{L}{3}/u.test(t.s)).map((t) => t.s))].slice(0, 120);
@@ -27,6 +27,7 @@ KURALLAR
 - Katman adlarını listede GÖRDÜĞÜN GİBİ (büyük/küçük harf ve Türkçe karakterler dahil) yaz.
 - "walls": duvar dış hatlarının çizildiği katman(lar). Tesisat (M-, HVAC, VRF, ST-), tefriş, tarama, ölçü, yazı katmanlarını SEÇME.
 - "columns": betonarme kolon/perde katmanları. "texts": mahal (oda) adlarının yazıldığı katmanlar; emin değilsen boş bırak.
+- "doors": kapı açılış yaylarının / kapı bloklarının çizildiği katmanlar; "windows": pencere doğramalarının katmanları. Boşluk bu katmanlardan bir çizime yakınsa türü otomatik kapı/pencere olur.
 - Yükseklikler santimetre. Türkiye'de tipik: kat yüksekliği 300-350, kapı 210-220, pencere parapeti 90-110, pencere yüksekliği 120-180.
 - "openings": yalnızca değiştirmek istediğin boşlukları yaz. kind: "door" (kapı), "window" (pencere), "empty" (kapısız geçiş/koridor), "delete" (boşluk değil). Dış cephedeki giriş kapılarını "door" yap (mahal adlarından ve genişlikten tahmin et, örn. 150+ cm dış boşluk ana giriş olabilir).
 - "rooms": adsız veya yanlış adlı mahaller için isim önerebilirsin.
@@ -35,7 +36,7 @@ KURALLAR
 İSTENEN CEVAP BİÇİMİ
 \`\`\`json
 {
-  "layers": { "walls": ["..."], "columns": ["..."], "texts": [] },
+  "layers": { "walls": ["..."], "columns": ["..."], "doors": ["..."], "windows": [], "texts": [] },
   "params": {
     "wallHeightCm": 300, "slabThicknessCm": 15, "doorHeightCm": 210,
     "windowSillCm": 90, "windowHeightCm": 150, "makeRoof": false,

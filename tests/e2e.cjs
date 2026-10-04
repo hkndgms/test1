@@ -19,6 +19,22 @@ const { chromium } = require(process.env.PW || 'playwright');
   console.log('note:', await page.textContent('#resultNote'));
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(out, 'e2e-plan.png') });
+  // Örnekten sonra başka DWG dosyaları yükle (EXTRA=dosya1,dosya2)
+  for (const f of (process.env.EXTRA || '').split(',').filter(Boolean)) {
+    await page.evaluate(() => { document.getElementById('status').textContent = ''; });
+    await page.setInputFiles('#fileInput', f);
+    await page.waitForFunction(() => /lgılandı|bulunamadı|açılamadı|seçilmedi|Okundu/.test(document.getElementById('status').textContent) || !document.getElementById('overlay').hidden && /açılamadı|Hata/.test(document.querySelector('#overlay b').textContent), null, { timeout: 60000 });
+    const ov = await page.$eval('#overlay', (o) => (o.hidden ? '' : o.textContent.replace(/\s+/g, ' ')));
+    await page.waitForTimeout(800);
+    console.log('extra', path.basename(f), '->', (await page.textContent('#status')).slice(0, 260), ov ? '| overlay: ' + ov.slice(0, 160) : '');
+    console.log('   stats:', await page.$$eval('.stat', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()).join(' | ')));
+    console.log('   wall layer:', await page.$$eval('tr.role-wall td.nm, tr.role-column td.nm', (els) => els.map((e) => e.textContent).join(', ')), '| unit:', await page.$eval('#pUnits', (s) => s.value));
+    await page.screenshot({ path: path.join(out, 'e2e-extra-' + path.basename(f) + '.png') });
+    await page.click('#tab3d'); await page.waitForTimeout(2500);
+    await page.screenshot({ path: path.join(out, 'e2e-extra3d-' + path.basename(f) + '.png') });
+    await page.click('#tabPlan');
+  }
+  if (process.env.EXTRA) { console.log('console errors/warnings:', errors.filter((e) => !/error code: 64|ERR_TOO_MANY|404/.test(e)).join('\n  ') || 'none'); await browser.close(); return; }
   // bir boşluğa tıkla: plan ortasında arama yerine model koordinatından
   const clicked = await page.evaluate(() => true);
   // 3B

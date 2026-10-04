@@ -424,9 +424,47 @@ export function detect(drawing, opts) {
     o.kind = o.exterior ? 'window' : widthCm > P.maxDoorCm ? 'empty' : 'door';
   }
 
+  // Kapı / pencere işaret katmanları (açılış yayı, doğrama çizgisi vb.) türü belirler
+  const markers = (set) => {
+    const pts = [];
+    if (!set || !set.size) return pts;
+    const r = opts.region;
+    for (const pr of drawing.prims) {
+      if (!set.has(pr.l)) continue;
+      for (let i = 0; i < pr.pts.length; i += 2) {
+        const x = pr.pts[i], y = pr.pts[i + 1];
+        if (r && (x < r[0] || x > r[2] || y < r[1] || y > r[3])) continue;
+        pts.push(x, y);
+      }
+    }
+    return pts;
+  };
+  const doorPts = markers(opts.doorLayers), winPts = markers(opts.windowLayers);
+  const near = (o, pts, reach) => {
+    const [cx, cy] = o.center;
+    for (let i = 0; i < pts.length; i += 2) {
+      const dx = pts[i] - cx, dy = pts[i + 1] - cy;
+      const sa = Math.abs(dx * o.along[0] + dy * o.along[1]);
+      const sc = Math.abs(dx * o.across[0] + dy * o.across[1]);
+      if (sa <= o.width / 2 + tol * 2 && sc <= o.thickness / 2 + reach) return true;
+    }
+    return false;
+  };
+  if (doorPts.length || winPts.length) {
+    for (const o of openings) {
+      if (doorPts.length && near(o, doorPts, Math.max(o.width, 30 * k))) { o.kind = 'door'; o.marker = 'door'; }
+      else if (winPts.length && near(o, winPts, 20 * k)) { o.kind = 'window'; o.marker = 'window'; }
+    }
+  }
+
   // Mahaller: kapı ve pencere boşlukları kapatılarak
   const rf = buildFaces(wallSegs.concat(colSegs, closures(openings.filter((o) => o.kind !== 'empty'))), tol, [minT * 0.5, maxT]);
-  const textOk = (t) => !opts.textLayers || opts.textLayers.size === 0 || opts.textLayers.has(t.l);
+  // Mahal adı: kullanıcı yazı katmanı seçtiyse yalnız onlar; seçmediyse tesisat,
+  // ölçü vb. katmanlardaki yazılar hariç hepsi (mahal/oda katmanları öncelikli)
+  const userText = opts.textLayers && opts.textLayers.size > 0;
+  const layerName = (t) => drawing.layers[t.l]?.name || '';
+  const textOk = (t) => (userText ? opts.textLayers.has(t.l) : !NON_ROOM_TEXT.test(layerName(t)));
+  const textRank = (t) => (!userText && ROOM_TEXT.test(layerName(t)) ? 1 : 0);
   const rooms = [];
   for (const f of rf.faces) {
     if (f.area < minRoom) continue;
@@ -435,7 +473,7 @@ export function detect(drawing, opts) {
     if (equivThickness(A, polyPerimeter(poly)) <= maxT) continue;
     if (columns.some((c) => Math.abs(polyArea(c.poly) - A) < tol * tol * 10)) continue;
     const inside = drawing.texts.filter((t) => textOk(t) && pointInPoly(t.x, t.y, poly) && isLabel(t.s));
-    inside.sort((p, q) => q.h - p.h);
+    inside.sort((p, q) => textRank(q) - textRank(p) || q.h - p.h);
     rooms.push({ id: 'R' + (rooms.length + 1), poly, area: A, name: inside[0]?.s || '' });
   }
 
@@ -446,6 +484,9 @@ export function detect(drawing, opts) {
     unitScale: 1 / k,
   };
 }
+
+const NON_ROOM_TEXT = /^m[-_ ]|hvac|vrf|klima|yang[ıi]n|fire|spr|sprink|elektr|electr|tesisat|sıhhi|sihhi|plumb|daikin|vana|valve|boru|pipe|ölçü|olcu|dim|kot|detail|detay|ata |walky|tefri|mobilya|furn/i;
+const ROOM_TEXT = /mahal|room|space|oda|yaz[ıi]|text|txt|anno/i;
 
 function distToPoly(x, y, poly) {
   let best = Infinity;
