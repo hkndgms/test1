@@ -1,10 +1,13 @@
 // DWG2BIM ana uygulama: dosya okuma, katman rolleri, algılama, düzenleme,
 // 3B önizleme, IFC dışa aktarma, yapay zekâ asistanı ve RVT inceleme.
-import { detect, DEFAULT_PARAMS, UNIT_NAMES, UNIT_TO_CM, collectSegments, buildFaces } from './detect.js';
+import { detect, DEFAULT_PARAMS, UNIT_NAMES, UNIT_TO_CM } from './detect.js';
+import { autoSetup } from './auto.js';
+import { KnowledgeBase, SYSTEMS, KINDS, fold } from './kb.js';
+import { layerStats, extractMep, detectElevations } from './mep.js';
 import { buildSolids, DEFAULT_BUILD } from './build3d.js';
 import { writeIfc } from './ifc.js';
 import { makeZip } from './zip.js';
-import { Plan2D, findById } from './view2d.js';
+import { Plan2D, findById, findMepById } from './view2d.js';
 import { buildPrompt, parseAnswer } from './ai-prompt.js';
 import { readRvt } from './rvt.js';
 
@@ -26,6 +29,19 @@ const state = {
   selected: null,
   tab: 'plan',
   view3d: null,
+  kb: new KnowledgeBase(),
+  planIsland: null,
+  islands: [],
+  mep: null, // tesisat çıkarımı
+  mepStats: [], // bölgedeki katman özetleri
+  mepProfiles: new Map(), // katman -> etkin profil
+  mepOverrides: {}, // katman -> kullanıcı / yapay zekâ düzeltmesi (bu proje)
+  mepVisible: true,
+  systemsOff: new Set(),
+  archVisible: true,
+  ceiling: { cm: 280, source: 'default', text: '' },
+  ceilingAsked: false,
+  elevations: null,
 };
 
 // ------------------------------------------------------------ yardımcılar
@@ -146,6 +162,12 @@ function onDrawing(d, secs) {
   state.drawing = d;
   state.units = UNIT_TO_CM[d.units] != null && d.units !== 0 ? d.units : 5;
   state.region = null;
+  state.mepOverrides = {};
+  state.systemsOff = new Set();
+  state.elevations = null;
+  state.ceiling = { cm: 280, source: 'default', text: '' };
+  state.ceilingAsked = false;
+  $('ceilDlg').hidden = true;
   plan.setDrawing(d);
   autoRoles();
   renderLayers();
@@ -154,7 +176,10 @@ function onDrawing(d, secs) {
   runDetect();
   plan.fitModel();
   overlay(null);
-  if (state.model?.walls.length) status(`Okundu (${secs} sn) ve algılandı. ${state.unitNote || 'Plandaki öğelere tıklayarak düzenleyebilirsiniz.'}`, 'ok');
+  if (state.model?.walls.length || mepCount()) {
+    const ign = state.islands?.length > 1 ? ` ${state.islands.length - 1} ayrık çizim grubu yok sayıldı.` : '';
+    status(`Okundu (${secs} sn) ve algılandı.${ign} ${state.unitNote || 'Plandaki öğelere tıklayarak düzenleyebilirsiniz.'}`, 'ok');
+  }
 }
 
 function renderFacts(secs) {
@@ -187,85 +212,33 @@ drop.addEventListener('drop', async (e) => {
 });
 
 // ------------------------------------------------------------ katman rolleri
-const WALL_RE = /duvar|wall|perde/i;
-const COL_RE = /beton|kolon|column|colm|struct|strukt|tasiyici|taşıyıcı/i;
-const DOOR_RE = /kap[ıi]|door|\bdr\b/i;
-const WIN_RE = /pencere|window|wndw|glaz/i;
-const SKIP_MARK_RE = /^m[-_]|hvac|vrf|yazi|yazı|text|tag|etiket/i;
-const SKIP_RE = /^m[-_]|hvac|vrf|tesisat|walky|tefri|tarama|hatch|olcu|ölçü|dim|yazi|yazı|text/i;
-
 function layerBBox(set) {
+  const within = state.planIsland?.bbox;
   let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
   for (const p of state.drawing.prims) {
     if (!set.has(p.l)) continue;
     for (let i = 0; i < p.pts.length; i += 2) {
       const x = p.pts[i], y = p.pts[i + 1];
+      if (within && (x < within[0] || x > within[2] || y < within[1] || y > within[3])) continue;
       if (x < a) a = x; if (x > c) c = x; if (y < b) b = y; if (y > d) d = y;
     }
   }
   if (!isFinite(a)) return null;
-  const m = Math.max(c - a, d - b) * 0.05;
+  const m = Math.max(c - a, d - b) * 0.12;
   return [a - m, b - m, c + m, d + m];
 }
 
-// Bir algılama sonucunun "gerçek bir binaya" ne kadar benzediği
-function modelScore(m) {
-  if (m.walls.length < 3) return 0;
-  const s2 = m.unitScale ** 2 / 1e4;
-  const rooms = m.rooms.filter((r) => { const a = Math.abs(r.area) * s2; return a >= 1 && a <= 1000; });
-  return 0.5 * m.walls.length + 2 * m.walls.filter((w) => w.exterior).length + 5 * rooms.length + 5 * rooms.filter((r) => r.name).length;
-}
-
-// Katman rollerini ve gerekirse çizim birimini tahmin eder. Birim: dosyadaki
-// INSUNITS çoğu zaman yanlıştır (ör. cm ile çizilip "mm" kaydedilmiş); bu yüzden
-// mm / cm / m ile de denenir, beyan edilen birime küçük bir öncelik verilir.
+// Asıl planın bulunduğu çizim grubunu, katman rollerini ve birimi tahmin eder
+// (ayrıntı: auto.js). Lejant, şema, detay ve uzak kalıntılar yok sayılır.
 function autoRoles() {
   const d = state.drawing;
-  const declared = state.units;
-  const units = [declared, ...[4, 5, 6].filter((u) => u !== declared)];
-  let cands = d.layers.map((l, i) => ({ l, i })).filter(({ l }) => l.count > 0 && WALL_RE.test(l.name) && !SKIP_RE.test(l.name));
-  const fallback = !cands.length;
-  if (fallback) {
-    // adında duvar geçen katman yoksa en kalabalık (tesisat/yazı olmayan) katmanları dene
-    cands = d.layers.map((l, i) => ({ l, i })).filter(({ l }) => l.count > 0 && !SKIP_RE.test(l.name) && !/^(0|defpoints)$/i.test(l.name))
-      .sort((a, b) => b.l.count - a.l.count).slice(0, 12);
-  }
-  let best = null;
-  for (const c of cands) {
-    const set = new Set([c.i]);
-    if (collectSegments(d, set, null).length > 20000) continue;
-    const region = layerBBox(set);
-    for (const u of units) {
-      const m = detect(d, { units: u, wallLayers: set, columnLayers: new Set(), region, params: state.params });
-      const score = modelScore(m) * (u === declared ? 1.15 : 1);
-      if (score > 0 && (!best || score > best.score)) best = { i: c.i, u, score };
-    }
-  }
-  state.unitNote = '';
-  if (best && best.u !== declared) {
-    state.unitNote = `Dosyada birim "${UNIT_NAMES[declared] || '?'}" yazıyor ama ölçüler ${UNIT_NAMES[best.u]} ile tutarlı; ${UNIT_NAMES[best.u]} kullanıldı. Gerekirse Ölçüler › Çizim birimi'nden değiştirin.`;
-    state.units = best.u;
-    fillParams();
-  }
-  state.roles = { wall: new Set(best ? [best.i] : []), column: new Set(), text: new Set(), door: new Set(), window: new Set() };
-  // Kapı / pencere işaret katmanları adlarından
-  d.layers.forEach((l, i) => {
-    if (!l.count || state.roles.wall.has(i) || SKIP_MARK_RE.test(l.name)) return;
-    if (DOOR_RE.test(l.name)) state.roles.door.add(i);
-    else if (WIN_RE.test(l.name)) state.roles.window.add(i);
-  });
-  state.autoRegion = best ? layerBBox(state.roles.wall) : null;
-  if (best) {
-    let bc = null;
-    for (const { l, i } of d.layers.map((l, i) => ({ l, i }))) {
-      if (!l.count || !COL_RE.test(l.name) || /tarama|hatch|[-_ ]trm[-_ ]/i.test(l.name)) continue;
-      const set = new Set([i]);
-      if (collectSegments(d, set, state.autoRegion).length > 20000) continue;
-      const m = detect(d, { units: state.units, wallLayers: new Set(), columnLayers: set, region: state.autoRegion, params: state.params });
-      if (!bc || m.columns.length > bc.n) bc = { i, n: m.columns.length };
-    }
-    if (bc && bc.n > 0) state.roles.column.add(bc.i);
-  }
+  const a = autoSetup(d, { params: state.params, units: state.units, kb: state.kb });
+  state.unitNote = a.unitNote;
+  if (a.units !== state.units) { state.units = a.units; fillParams(); }
+  state.roles = a.roles;
+  state.autoRegion = a.region;
+  state.planIsland = a.planIsland;
+  state.islands = a.islands;
 }
 
 function roleOf(i) {
@@ -303,7 +276,7 @@ $('layerRows').addEventListener('change', (e) => {
     for (const s of Object.values(state.roles)) s.delete(i);
     if (e.target.value) state.roles[e.target.value].add(i);
     tr.className = e.target.value ? 'role-' + e.target.value : '';
-    if (e.target.value === 'wall' || state.roles.wall.size) state.autoRegion = layerBBox(state.roles.wall);
+    if (e.target.value === 'wall' && state.roles.wall.size) state.autoRegion = layerBBox(state.roles.wall);
     runDetect();
   }
 });
@@ -343,32 +316,67 @@ for (const k of BUILD_CHK) $(k).onchange = () => { state.build[k] = $(k).checked
 $('btnDetect').onclick = () => runDetect();
 
 // ------------------------------------------------------------ algılama
+const emptyModel = () => ({ walls: [], columns: [], openings: [], rooms: [], outline: null, unitScale: UNIT_TO_CM[state.units] ?? 1, stats: {} });
+
 function runDetect() {
   if (!state.drawing) return;
   const t0 = performance.now();
-  if (!state.roles.wall.size) {
-    state.model = null;
-    plan.setModel(null);
-    renderStats();
-    status('Duvar katmanı seçilmedi. Katman listesinden en az bir katmanı "Duvar" yapın.', 'err');
-    return;
-  }
   const region = state.region || state.autoRegion || null;
   plan.region = state.region;
-  state.model = detect(state.drawing, {
+  state.model = state.roles.wall.size ? detect(state.drawing, {
     units: state.units, wallLayers: state.roles.wall, columnLayers: state.roles.column,
     textLayers: state.roles.text, doorLayers: state.roles.door, windowLayers: state.roles.window, region, params: state.params,
-  });
+  }) : emptyModel();
   state.overrides = {};
   state.selected = null;
   plan.setModel(state.model, state.overrides);
   renderStats();
+  runMep(false);
   renderSel();
   rebuild3d(false);
-  ['btnExport', 'btnExportTop'].forEach((id) => ($(id).disabled = !state.model.walls.length));
+  const hasAny = state.model.walls.length || mepCount() > 0;
+  ['btnExport', 'btnExportTop'].forEach((id) => ($(id).disabled = !hasAny));
   const ms = Math.round(performance.now() - t0);
-  if (!state.model.walls.length) status('Seçilen katmanlarda duvar bulunamadı. Başka bir katman deneyin veya "En kalın duvar" ayarını artırın.', 'err');
+  if (!state.roles.wall.size && !mepCount()) status('Duvar katmanı seçilmedi ve tesisat bulunamadı. Katman listesinden en az bir katmanı "Duvar" yapın.', 'err');
+  else if (!state.model.walls.length && !mepCount()) status('Seçilen katmanlarda duvar bulunamadı. Başka bir katman deneyin veya "En kalın duvar" ayarını artırın.', 'err');
   else status(`Algılandı (${ms} ms). Plandaki öğelere tıklayarak düzenleyebilirsiniz.`, 'ok');
+}
+
+// ------------------------------------------------------------ tesisat
+const mepCount = () => (state.mep ? state.mep.pipes.length + state.mep.ducts.length + state.mep.boxes.length : 0);
+
+// Katmanın etkin profili: bilgi bankası kararı + bu projedeki düzeltmeler
+function profileFor(l) {
+  const name = state.drawing.layers[l].name;
+  const base = state.kb.classify(name);
+  const ov = state.mepOverrides[l];
+  return ov ? { ...base, ...ov, source: ov.source || 'user' } : base;
+}
+
+function runMep(rebuild = true) {
+  const d = state.drawing;
+  if (!d) return;
+  const region = state.region || state.autoRegion || null;
+  const arch = new Set([...state.roles.wall, ...state.roles.column, ...state.roles.door, ...state.roles.window, ...state.roles.text]);
+  state.mepStats = layerStats(d, region, state.units).filter((st) => !arch.has(st.l));
+  state.mepProfiles = new Map();
+  for (const st of state.mepStats) state.mepProfiles.set(st.l, profileFor(st.l));
+  state.mep = extractMep(d, { region, units: state.units, profiles: state.mepProfiles });
+  plan.mepUnitScale = UNIT_TO_CM[state.units] ?? 1;
+  plan.setMep(state.mep, state.mepProfiles, { visible: state.mepVisible, systems: visibleSystems() });
+  // kot: projede varsa oradan, yoksa kullanıcıya sor
+  if (!state.elevations) {
+    state.elevations = detectElevations(d, region);
+    if (state.elevations.ceiling) state.ceiling = { cm: state.elevations.ceiling.cm, source: 'project', text: state.elevations.ceiling.text };
+  }
+  renderMepPanel();
+  if (mepCount() && state.ceiling.source === 'default' && !state.ceilingAsked) askCeiling();
+  if (rebuild) rebuild3d();
+}
+
+function visibleSystems() {
+  if (!state.systemsOff.size) return null;
+  return new Set(Object.keys(SYSTEMS).filter((k) => !state.systemsOff.has(k)));
 }
 
 function effKind(o) { return state.overrides[o.id]?.kind || o.kind; }
@@ -390,9 +398,17 @@ function renderStats() {
   }
 }
 
+function buildAll() {
+  return buildSolids(state.model, {
+    ...state.build, mep: state.mepVisible ? state.mep : null, mepProfiles: state.mepProfiles,
+    ceilingCm: state.ceiling.cm, layerNames: state.drawing.layers.map((l) => l.name),
+  }, state.overrides);
+}
+
 function rebuild3d(keepCamera = true) {
   if (!state.view3d || !state.model) return;
-  state.view3d.setSolids(buildSolids(state.model, state.build, state.overrides).solids, { keepCamera });
+  state.view3d.setSolids(buildAll().solids, { keepCamera });
+  state.view3d.setVisibility({ arch: state.archVisible, systems: visibleSystems() });
   state.view3d.setSelected(state.selected);
 }
 
@@ -418,6 +434,8 @@ function numField(id, label, value, unit = 'cm') {
 
 function renderSel() {
   const box = $('selPanel');
+  const me = findMepById(state.mep, state.selected);
+  if (me) return renderMepSel(box, me);
   const el = findById(state.model, state.selected);
   if (!el) { box.innerHTML = ''; return; }
   const id = el.id, ov = state.overrides[id] || {}, B = state.build;
@@ -457,6 +475,196 @@ function renderSel() {
   const del = $('selDel'); if (del) del.onclick = () => { setOv(id, { deleted: true }); select(null); };
 }
 
+// ------------------------------------------------------------ tesisat paneli
+const SRC_LABEL = { builtin: 'Yerleşik', ai: 'Öğrenildi (YZ)', user: 'Kullanıcı', unknown: 'Bilinmiyor' };
+const reEsc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const sysOptions = (cur) => Object.entries(SYSTEMS).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
+const kindOptions = (cur) => `<option value="" ${!cur ? 'selected' : ''}>— seçin —</option>` + Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+
+function mepSummary() {
+  const sum = new Map();
+  if (!state.mep) return sum;
+  const get = (l) => { const p = state.mepProfiles.get(l); if (!p || !p.kind || p.kind === 'ignore') return null; let o = sum.get(p.system); if (!o) sum.set(p.system, (o = { pipeM: 0, n: 0 })); return o; };
+  for (const p of state.mep.pipes) { const o = get(p.l); if (o) o.pipeM += p.lengthCm / 100; }
+  for (const x of [...state.mep.ducts, ...state.mep.boxes]) { const o = get(x.l); if (o) o.n++; }
+  return sum;
+}
+
+function renderMepPanel() {
+  const sum = mepSummary();
+  $('sysChips').innerHTML = [...sum.entries()].map(([k, v]) => {
+    const sys = SYSTEMS[k] || SYSTEMS.other;
+    const off = state.systemsOff.has(k);
+    return `<label class="syschip ${off ? 'off' : ''}"><input type="checkbox" data-sys="${k}" ${off ? '' : 'checked'}><i class="dot" style="background:${sys.color}"></i>${esc(sys.label)} <b>${v.pipeM ? v.pipeM.toFixed(0) + ' m' : ''}${v.pipeM && v.n ? ' · ' : ''}${v.n ? v.n + ' adet' : ''}</b></label>`;
+  }).join('') || '<span class="hint">Bu bölgede tesisat bulunamadı.</span>';
+  // kot
+  const c = state.ceiling;
+  $('ceilCm').value = c.cm;
+  $('ceilBox').classList.toggle('warn', c.source === 'default');
+  $('ceilSrc').textContent = c.source === 'project' ? `Projeden okundu: "${c.text}"` : c.source === 'user' ? 'Sizin girdiğiniz değer' : c.source === 'ai' ? `Yapay zekâ önerisi${c.text ? ': ' + c.text : ''}` : 'Projede bulunamadı, lütfen girin (şu an varsayılan 280 cm kullanılıyor).';
+  $('ceilCands').innerHTML = (state.elevations?.candidates || []).map((k) => `<button data-cm="${k.cm}" title="Çizimde ${k.count} kez geçiyor">+${(k.cm / 100).toFixed(2)} (${k.count})</button>`).join('');
+  // katmanlar
+  const rows = state.mepStats.map((st) => ({ st, p: state.mepProfiles.get(st.l) }))
+    .filter(({ st, p }) => p && ((p.kind && p.kind !== 'ignore') || p.unknown || (p.kind === 'ignore' && (p.wouldBe || /^M[-_ ]/.test(fold(st.name)) || state.mepOverrides[st.l]))));
+  const rank = (r) => (r.p.unknown && !r.p.kind ? 0 : r.p.kind === 'ignore' ? 2 : 1);
+  rows.sort((a, b) => rank(a) - rank(b) || b.st.count - a.st.count);
+  const unknownN = rows.filter((r) => r.p.unknown && !r.p.kind).length;
+  $('mepNote').textContent = `${rows.filter((r) => r.p.kind && r.p.kind !== 'ignore').length} tesisat katmanı kullanılıyor` + (unknownN ? `, ${unknownN} bilinmeyen katman var: yapay zekâ asistanına sorun veya elle seçin.` : '.') +
+    (state.islands?.length > 1 ? ` Paftadaki ${state.islands.length - 1} ayrık çizim grubu (lejant, şema, detay, kalıntı) yok sayıldı.` : '') +
+    (state.mep?.dropped?.coverage ? ` ${state.mep.dropped.coverage} sprinkler etki dairesi atlandı.` : '');
+  $('mepLayers').innerHTML = rows.map(({ st, p }) => {
+    const sys = SYSTEMS[p.system] || SYSTEMS.other;
+    const base = p.elevRef === 'floor' ? 0 : state.ceiling.cm;
+    const abs = Math.round(base + (p.elevOffsetCm || 0));
+    const src = p.unknown && !p.kind ? 'unknown' : p.source || 'builtin';
+    const cls = p.unknown && !p.kind ? 'unknown' : p.kind === 'ignore' ? 'ignored' : '';
+    return `<div class="ml ${cls}" data-l="${st.l}">
+      <div class="h"><i class="dot" style="background:${p.kind && p.kind !== 'ignore' ? sys.color : 'var(--line)'}"></i><span class="nm" title="${esc(st.name)}${p.note ? ' — ' + esc(p.note) : ''}">${esc(st.name)}</span><span class="ct">${st.count}</span><span class="badge ${src}">${SRC_LABEL[src] || src}</span></div>
+      <div class="c"><select class="mk" aria-label="Tür">${kindOptions(p.kind)}</select>${p.kind && p.kind !== 'ignore' ? `<select class="ms" aria-label="Sistem">${sysOptions(p.system)}</select>` : ''}</div>
+      ${p.kind && p.kind !== 'ignore' ? `<div class="c"><select class="mr" aria-label="Kot referansı"><option value="ceiling" ${p.elevRef !== 'floor' ? 'selected' : ''}>Tavandan</option><option value="floor" ${p.elevRef === 'floor' ? 'selected' : ''}>Döşemeden</option></select>
+        <label>kot <input type="number" class="mz" value="${abs}" step="5" aria-label="Kot (cm)"></label>
+        <label>${p.kind === 'pipe' ? 'çap' : p.kind === 'air' ? 'kanal yük.' : 'yük.'} <input type="number" class="msz" value="${p.sizeCm ?? ''}" step="0.5" aria-label="Ölçü (cm)"></label>
+        <button class="btn small teach" title="Bu katmanın ayarını bilgi bankasına kural olarak kaydet">Öğret</button></div>` : `<div class="c hint">${esc(p.note || '')}${p.unknown && st.texts.length ? ' · yazılar: ' + esc(st.texts.slice(0, 3).join(', ')) : ''}</div>`}
+    </div>`;
+  }).join('') || '<div class="ml hint">Bölgede tesisat katmanı yok.</div>';
+}
+
+function readRow(row) {
+  const l = +row.dataset.l;
+  const cur = state.mepProfiles.get(l) || {};
+  const kind = row.querySelector('.mk')?.value || null;
+  const system = row.querySelector('.ms')?.value || cur.system || 'other';
+  const elevRef = row.querySelector('.mr')?.value || cur.elevRef || 'ceiling';
+  const mz = row.querySelector('.mz');
+  const base = elevRef === 'floor' ? 0 : state.ceiling.cm;
+  const elevOffsetCm = mz ? parseFloat(mz.value) - base : cur.elevOffsetCm || 0;
+  const sz = parseFloat(row.querySelector('.msz')?.value);
+  return { l, kind, system, elevRef, elevOffsetCm: Number.isFinite(elevOffsetCm) ? elevOffsetCm : 0, sizeCm: Number.isFinite(sz) && sz > 0 ? sz : cur.sizeCm };
+}
+
+$('mepLayers').addEventListener('change', (e) => {
+  const row = e.target.closest('.ml[data-l]');
+  if (!row) return;
+  const r = readRow(row);
+  // tür değişince varsayılan kot/ölçüyü bilgi bankasındaki benzer kuraldan al
+  if (e.target.classList.contains('mk') && r.kind && r.kind !== 'ignore' && !row.querySelector('.mr')) {
+    Object.assign(r, { system: 'other', elevRef: r.kind === 'equipment' ? 'floor' : 'ceiling', elevOffsetCm: r.kind === 'pipe' ? -20 : 0, sizeCm: r.kind === 'pipe' ? 2.5 : 30 });
+  }
+  state.mepOverrides[r.l] = { kind: r.kind, system: r.system, elevRef: r.elevRef, elevOffsetCm: r.elevOffsetCm, sizeCm: r.sizeCm, source: 'user', unknown: false };
+  runMep();
+});
+$('mepLayers').addEventListener('click', (e) => {
+  if (!e.target.classList.contains('teach')) return;
+  const row = e.target.closest('.ml[data-l]');
+  const r = readRow(row);
+  const name = state.drawing.layers[r.l].name;
+  const base = name.includes('$0$') ? name.slice(name.lastIndexOf('$0$') + 3) : name;
+  state.kb.addRule({ pattern: '^' + reEsc(fold(base)) + '$', kind: r.kind, system: r.system, elevRef: r.elevRef, elevOffsetCm: r.elevOffsetCm, sizeCm: r.sizeCm, note: 'Kullanıcı öğretti: ' + base }, 'user');
+  state.kb.save();
+  renderKb();
+  e.target.textContent = 'Öğrenildi';
+  e.target.disabled = true;
+});
+$('sysChips').addEventListener('change', (e) => {
+  const k = e.target.dataset.sys;
+  if (!k) return;
+  if (e.target.checked) state.systemsOff.delete(k); else state.systemsOff.add(k);
+  e.target.closest('.syschip').classList.toggle('off', !e.target.checked);
+  plan.setMep(state.mep, state.mepProfiles, { visible: state.mepVisible, systems: visibleSystems() });
+  state.view3d?.setVisibility({ arch: state.archVisible, systems: visibleSystems() });
+});
+$('mepOn').onchange = () => {
+  state.mepVisible = $('mepOn').checked;
+  plan.setMep(state.mep, state.mepProfiles, { visible: state.mepVisible, systems: visibleSystems() });
+  rebuild3d();
+};
+$('archOn').onchange = () => { state.archVisible = $('archOn').checked; state.view3d?.setVisibility({ arch: state.archVisible, systems: visibleSystems() }); };
+function setCeiling(cm, source, text = '') {
+  if (!(cm >= 150 && cm <= 2000)) return;
+  state.ceiling = { cm: Math.round(cm), source, text };
+  renderMepPanel();
+  rebuild3d();
+}
+$('ceilCm').onchange = () => setCeiling(parseFloat($('ceilCm').value), 'user');
+$('ceilCands').addEventListener('click', (e) => { const v = +e.target.dataset.cm; if (v) setCeiling(v, 'user'); });
+
+// Projede kot yoksa kullanıcıya sor
+function askCeiling() {
+  state.ceilingAsked = true;
+  const c = state.elevations?.candidates || [];
+  $('ceilDlgCm').value = state.ceiling.cm;
+  $('ceilDlgCandHint').hidden = !c.length;
+  $('ceilDlgCands').innerHTML = c.map((k) => `<button data-cm="${k.cm}" title="Çizimde ${k.count} kez geçiyor">+${(k.cm / 100).toFixed(2)} (${k.count})</button>`).join('');
+  $('ceilDlg').hidden = false;
+}
+$('ceilDlgCands').addEventListener('click', (e) => { const v = +e.target.dataset.cm; if (v) $('ceilDlgCm').value = v; });
+$('ceilDlgOk').onclick = () => { $('ceilDlg').hidden = true; setCeiling(parseFloat($('ceilDlgCm').value), 'user'); };
+$('ceilDlgLater').onclick = () => { $('ceilDlg').hidden = true; };
+
+// Seçili tesisat elemanı
+function renderMepSel(box, el) {
+  const p = state.mepProfiles.get(el.l) || {};
+  const sys = SYSTEMS[p.system] || SYSTEMS.other;
+  const name = state.drawing.layers[el.l].name;
+  const type = el.id[0] === 'P' ? 'Boru' : el.id[0] === 'D' ? 'Kanal' : p.kind === 'air' ? 'Menfez' : p.kind === 'terminal' ? 'Uç birim' : 'Cihaz';
+  const size = el.id[0] === 'P' ? `Ø${Math.round((el.diaSrc === 'label' ? el.diaCm : p.sizeCm || 2.5) * 10)} mm (${el.diaSrc === 'label' ? 'çizimdeki "' + esc(el.diaText) + '" yazısından' : 'katman varsayılanı'}) · ${(el.lengthCm / 100).toFixed(2)} m`
+    : el.id[0] === 'D' ? `${Math.round(el.widthCm)} cm genişlik${el.sizeText ? ' · "' + esc(el.sizeText) + '"' : ''}` : esc(el.name || '');
+  box.innerHTML = `<div class="sel"><div class="row"><b>${type} ${el.id}</b><span class="hint">${esc(sys.label)}</span></div>
+    <span class="hint">Katman: ${esc(name)}<br>${size}</span>
+    <div class="row"><select id="selSys" aria-label="Sistem">${sysOptions(p.system)}</select><button class="btn small" id="selIgnore">Bu katmanı yok say</button></div>
+    <p class="hint">Sistem ve yok sayma bütün katmana uygulanır; kot ve ölçü için Mekanik tesisat listesini kullanın.</p></div>`;
+  $('selSys').onchange = () => { state.mepOverrides[el.l] = { ...p, system: $('selSys').value, source: 'user', unknown: false }; runMep(); renderSel(); };
+  $('selIgnore').onclick = () => { state.mepOverrides[el.l] = { ...p, kind: 'ignore', source: 'user', unknown: false }; select(null); runMep(); };
+}
+
+// ------------------------------------------------------------ bilgi bankası
+function renderKb() {
+  const st = state.kb.stats();
+  $('kbStats').textContent = `${st.builtin} yerleşik kural · ${st.learned} öğrenilmiş kural · ${st.ignore} öğrenilmiş temizlik kuralı`;
+  const items = [
+    ...state.kb.learned.map((r) => `${esc(r.pattern)} → ${esc(KINDS[r.kind] || r.kind)}${r.kind !== 'ignore' ? ' / ' + esc(SYSTEMS[r.system]?.label || r.system) : ''} <i>(${r.source === 'user' ? 'kullanıcı' : 'YZ'})</i>`),
+    ...state.kb.ignore.map((r) => `${esc(r.pattern)} → yok say: ${esc(r.reason)} <i>(${r.source === 'user' ? 'kullanıcı' : 'YZ'})</i>`),
+  ];
+  $('kbList').innerHTML = items.slice(0, 40).map((t) => `<li>${t}</li>`).join('') || '<li>Henüz öğrenilmiş kural yok. Yapay zekâ asistanı veya "Öğret" düğmesiyle eklenir.</li>';
+}
+renderKb();
+$('btnKbExport').onclick = async () => {
+  const data = JSON.stringify(state.kb.toJSON(), null, 2);
+  const dl = await capDownloads;
+  try {
+    if (dl) await dl.save({ filename: 'dwg2bim-bilgi-bankasi.json', data });
+    else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
+      a.download = 'dwg2bim-bilgi-bankasi.json';
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    }
+    aiStatus('Bilgi bankası dışa aktarıldı.', 'ok');
+  } catch (e) { if (e?.code !== 'declined') aiStatus('Dışa aktarılamadı: ' + (e?.message || e?.code), 'err'); }
+};
+$('kbInput').onchange = async () => {
+  const f = $('kbInput').files[0];
+  $('kbInput').value = '';
+  if (!f) return;
+  try {
+    const n = state.kb.importJSON(JSON.parse(await f.text()));
+    renderKb();
+    if (state.drawing) runMep();
+    aiStatus(`${n} kural içe aktarıldı.`, 'ok');
+  } catch (e) { aiStatus('İçe aktarılamadı: ' + e.message, 'err'); }
+};
+let kbResetArmed = false;
+$('btnKbReset').onclick = () => {
+  if (!kbResetArmed) { kbResetArmed = true; $('btnKbReset').textContent = 'Emin misiniz? Tekrar basın'; setTimeout(() => { kbResetArmed = false; $('btnKbReset').textContent = 'Öğrenilenleri sil'; }, 4000); return; }
+  kbResetArmed = false;
+  $('btnKbReset').textContent = 'Öğrenilenleri sil';
+  state.kb.reset();
+  renderKb();
+  if (state.drawing) runMep();
+  aiStatus('Öğrenilmiş kurallar silindi; yerleşik kurallar duruyor.', 'ok');
+};
+
 // ------------------------------------------------------------ görünüm düğmeleri
 $('btnFit').onclick = () => plan.fitModel();
 $('btnFitAll').onclick = () => plan.fit(state.drawing?.bbox);
@@ -478,7 +686,7 @@ function baseName() {
 async function exportIfc() {
   if (!state.model) return;
   const name = baseName();
-  const ifc = writeIfc(buildSolids(state.model, state.build, state.overrides), { fileName: name + '.ifc' });
+  const ifc = writeIfc(buildAll(), { fileName: name + '.ifc' });
   const dl = await capDownloads;
   try {
     if (dl) {
@@ -505,7 +713,10 @@ $('btnExportTop').onclick = exportIfc;
 // ------------------------------------------------------------ yapay zekâ asistanı
 const aiStatus = (m, k) => setStatus($('aiStatus'), m, k);
 function currentPrompt() {
-  return buildPrompt({ drawing: state.drawing, roles: state.roles, params: state.params, buildParams: state.build, model: state.model, fileName: state.fileName });
+  return buildPrompt({
+    drawing: state.drawing, roles: state.roles, params: state.params, buildParams: state.build, model: state.model, fileName: state.fileName,
+    mepStats: state.mepStats, mepProfiles: state.mepProfiles, elevations: state.elevations, ceiling: state.ceiling, islands: state.islands,
+  });
 }
 $('btnPrompt').onclick = () => {
   if (!state.drawing) return;
@@ -597,11 +808,38 @@ function applyAnswer() {
     if (nOps) done.push(nOps + ' boşluk');
     if (nRooms) done.push(nRooms + ' mahal adı');
   }
+  // Tesisat: bu projedeki katman kararları
+  let nMep = 0, nLearn = 0, nIgn = 0;
+  for (const [name, v] of Object.entries(a.mep || {})) {
+    const i = byName.get(String(name).toLocaleLowerCase('tr'));
+    if (i == null || !v || (v.kind && !KINDS[v.kind])) { if (i == null) missing.push(name); continue; }
+    const cur = state.mepProfiles.get(i) || state.kb.classify(state.drawing.layers[i].name);
+    state.mepOverrides[i] = {
+      kind: v.kind || cur.kind, system: SYSTEMS[v.system] ? v.system : cur.system || 'other',
+      elevRef: v.elevRef === 'floor' ? 'floor' : v.elevRef === 'ceiling' ? 'ceiling' : cur.elevRef || 'ceiling',
+      elevOffsetCm: Number.isFinite(+v.elevOffsetCm) ? +v.elevOffsetCm : cur.elevOffsetCm || 0,
+      sizeCm: Number.isFinite(+v.sizeCm) && +v.sizeCm > 0 ? +v.sizeCm : cur.sizeCm, source: 'ai', unknown: false,
+    };
+    nMep++;
+  }
+  // Öğrenme: genel kurallar bilgi bankasına
+  for (const r of Array.isArray(a.learn) ? a.learn : []) if (state.kb.addRule(r, 'ai')) nLearn++;
+  for (const r of Array.isArray(a.ignore) ? a.ignore : []) if (state.kb.addIgnore(r, 'ai')) nIgn++;
+  if (nLearn || nIgn) { state.kb.save(); renderKb(); }
+  if (Number.isFinite(+a.ceilingCm) && +a.ceilingCm >= 150 && state.ceiling.source !== 'user') {
+    state.ceiling = { cm: Math.round(+a.ceilingCm), source: 'ai', text: String(a.ceilingReason || '').slice(0, 120) };
+    $('ceilDlg').hidden = true;
+    done.push('asma tavan kotu ' + state.ceiling.cm + ' cm');
+  }
+  if (nMep) done.push(nMep + ' tesisat katmanı');
+  if (nLearn || nIgn) done.push(`bilgi bankasına ${nLearn} yeni kural${nIgn ? ' + ' + nIgn + ' temizlik kuralı' : ''}`);
+  runMep(false);
   plan.setModel(state.model, state.overrides);
   renderStats();
   rebuild3d();
   renderSel();
   let msg = done.length ? 'Uygulandı: ' + done.join(', ') + '.' : 'Cevapta uygulanacak bir ayar bulunamadı.';
+  if (Array.isArray(a.questions) && a.questions.length) msg += ' Yapay zekânın soruları: ' + a.questions.slice(0, 3).join(' / ');
   if (missing.length) msg += ' Bulunamayan katman: ' + missing.join(', ') + '.';
   if (layersChanged && (a.openings || a.rooms)) msg += ' Katmanlar değiştiği için boşluk/mahal numaraları yenilendi; ince ayar için yeni bir komut oluşturup tekrar sorun.';
   if (a.notes) msg += ' Not: ' + a.notes;

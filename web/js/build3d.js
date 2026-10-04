@@ -23,9 +23,15 @@ export function buildSolids(model, params, overrides = {}) {
   const P = { ...DEFAULT_BUILD, ...params };
   const s = model.unitScale / 100; // çizim birimi -> metre
   const all = [...model.walls, ...model.columns].flatMap((w) => w.poly);
-  if (!all.length) return { solids: [], origin: [0, 0], P };
   let ox = Infinity, oy = Infinity;
   for (const [x, y] of all) { if (x < ox) ox = x; if (y < oy) oy = y; }
+  if (!all.length) {
+    // duvar yoksa (salt tesisat paftası) başlangıç noktası tesisattan alınır
+    const m = params.mep;
+    const pts = m ? [...m.pipes.flatMap((p) => p.pts), ...m.ducts.flatMap((d) => d.poly), ...m.boxes.flatMap((b) => b.poly)] : [];
+    if (!pts.length) return { solids: [], origin: [0, 0], P };
+    for (const [x, y] of pts) { if (x < ox) ox = x; if (y < oy) oy = y; }
+  }
   const tr = (p) => [(p[0] - ox) * s, (p[1] - oy) * s];
   const ccw = (poly) => (polyArea(poly) < 0 ? poly.slice().reverse() : poly);
   const H = P.wallHeightCm / 100;
@@ -92,5 +98,56 @@ export function buildSolids(model, params, overrides = {}) {
       out.push({ type: 'space', id: r.id, src: r.id, name: o.name ?? r.name ?? '', profile: ccw(r.poly.map(tr)), z0: 0, z1: H, props: { areaM2: +(Math.abs(r.area) * s * s).toFixed(2) } });
     }
   }
+  if (params.mep) out.push(...buildMepSolids(params.mep, params.mepProfiles, { ceilingCm: params.ceilingCm ?? 280, origin: [ox, oy], scale: s, layerNames: params.layerNames }));
   return { solids: out, origin: [ox, oy], scale: s, P };
+}
+
+// ------------------------------------------------------------ mekanik tesisat
+// profiles: Map<layer, {kind, system, elevRef, elevOffsetCm, sizeCm}>
+// Kot: (asma tavan veya döşeme) + fark. Boru: eksen kotu. Cihaz: tavana asılıysa
+// üst yüzü, döşemedeyse alt yüzü bu kota oturur.
+export function buildMepSolids(mep, profiles, { ceilingCm, origin, scale, layerNames = [] }) {
+  if (!mep) return [];
+  const [ox, oy] = origin;
+  const s = scale;
+  const tr = (p) => [(p[0] - ox) * s, (p[1] - oy) * s];
+  const ccw = (poly) => (polyArea(poly) < 0 ? poly.slice().reverse() : poly);
+  const elev = (prof) => ((prof.elevRef === 'floor' ? 0 : ceilingCm) + (prof.elevOffsetCm || 0)) / 100;
+  const out = [];
+  for (const p of mep.pipes) {
+    const prof = profiles.get(p.l);
+    if (!prof || prof.kind !== 'pipe' || prof.hidden) continue;
+    const dia = (p.diaSrc === 'label' && p.diaCm ? p.diaCm : prof.sizeCm || 2.5) / 100;
+    const z = elev(prof);
+    out.push({
+      type: 'pipe', id: p.id, src: p.id, l: p.l, system: prof.system, name: `${layerNames[p.l] || ''} Ø${Math.round(dia * 1000)}`,
+      path: p.pts.map((q) => [...tr(q), z]), r: Math.max(dia / 2, 0.004),
+      props: { diaMm: Math.round(dia * 1000), diaSrc: p.diaSrc, lengthM: +(p.lengthCm / 100).toFixed(2), layer: layerNames[p.l] || '' },
+    });
+  }
+  for (const d of mep.ducts) {
+    const prof = profiles.get(d.l);
+    if (!prof || prof.kind !== 'air' || prof.hidden) continue;
+    const h = (d.heightCm || Math.min(d.widthCm, prof.sizeCm || 30)) / 100;
+    const e = elev(prof);
+    const [z0, z1] = prof.elevRef === 'floor' ? [e, e + h] : [e - h, e];
+    out.push({
+      type: 'duct', id: d.id, src: d.id, l: d.l, system: prof.system, name: `Kanal ${Math.round(d.widthCm)}x${Math.round(h * 100)}`,
+      profile: ccw(d.poly.map(tr)), z0, z1, props: { widthCm: Math.round(d.widthCm), heightCm: Math.round(h * 100), layer: layerNames[d.l] || '' },
+    });
+  }
+  for (const b of mep.boxes) {
+    const prof = profiles.get(b.l);
+    if (!prof || prof.kind === 'ignore' || prof.kind === 'pipe' || prof.hidden) continue;
+    const airTerm = prof.kind === 'air';
+    const h = (airTerm ? 5 : prof.sizeCm || 30) / 100;
+    const e = elev(prof);
+    const [z0, z1] = prof.elevRef === 'floor' ? [e, e + h] : [e - h, e];
+    out.push({
+      type: airTerm ? 'airterminal' : prof.kind === 'terminal' ? 'terminal' : 'equipment',
+      id: b.id, src: b.id, l: b.l, system: prof.system, name: b.name || layerNames[b.l] || '',
+      profile: ccw(b.poly.map(tr)), z0, z1, props: { layer: layerNames[b.l] || '', block: b.name || '' },
+    });
+  }
+  return out;
 }

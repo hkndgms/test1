@@ -1,6 +1,8 @@
 // IFC4 (ISO 16739) STEP yazıcı. buildSolids() çıktısını alır, Revit / FreeCAD /
 // BlenderBIM'in açabileceği tek katlı bir model üretir.
 
+import { SYSTEMS } from './kb.js';
+
 const B64 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$';
 
 export function ifcGuid() {
@@ -103,7 +105,64 @@ export function writeIfc(build, { fileName = 'model.ifc', timestamp = new Date()
 
   const contained = [];
   const spaces = [];
+  const systems = new Map(); // sistem -> eleman listesi
+  const dir3 = (v) => add(`IFCDIRECTION((${real(v[0])},${real(v[1])},${real(v[2])}))`);
+  const pt3 = (v) => add(`IFCCARTESIANPOINT((${real(v[0])},${real(v[1])},${real(v[2])}))`);
+  // Boru: her segment, eksen doğrultusunda uzatılmış bir daire kesit
+  const pipeShape = (path, r) => {
+    const items = [];
+    const prof = add(`IFCCIRCLEPROFILEDEF(.AREA.,$,$,${real(r)})`);
+    for (let i = 1; i < path.length; i++) {
+      const a = path[i - 1], b = path[i];
+      const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+      const L = Math.hypot(d[0], d[1], d[2]);
+      if (L < 1e-4) continue;
+      const u = d.map((x) => x / L);
+      const ref = Math.abs(u[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      let px = [u[1] * ref[2] - u[2] * ref[1], u[2] * ref[0] - u[0] * ref[2], u[0] * ref[1] - u[1] * ref[0]];
+      const pl = Math.hypot(...px); px = px.map((x) => x / pl);
+      const pos = add(`IFCAXIS2PLACEMENT3D(${pt3(a)},${dir3(u)},${dir3(px)})`);
+      items.push(add(`IFCEXTRUDEDAREASOLID(${prof},${pos},${zDir},${real(L)})`));
+    }
+    if (!items.length) return null;
+    const rep = add(`IFCSHAPEREPRESENTATION(${body},'Body','SweptSolid',(${items.join(',')}))`);
+    return add(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
+  };
+  const MEP_TYPES = new Set(['pipe', 'duct', 'airterminal', 'terminal', 'equipment']);
   for (const so of solids) {
+    if (MEP_TYPES.has(so.type)) {
+      const sys = SYSTEMS[so.system] || SYSTEMS.other;
+      const air = /air|exhaust/.test(so.system || '');
+      const g = ifcGuid();
+      const nm = stepStr(so.name);
+      const tag = stepStr(so.src);
+      let e;
+      if (so.type === 'pipe') {
+        const shape = pipeShape(so.path, so.r);
+        if (!shape) continue;
+        const pl = place(stPl, 0);
+        e = add(`${air ? 'IFCDUCTSEGMENT' : 'IFCPIPESEGMENT'}('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},${air ? '.FLEXIBLESEGMENT.' : '.RIGIDSEGMENT.'})`);
+      } else {
+        if (so.profile.length < 3 || so.z1 - so.z0 <= 1e-4) continue;
+        const pl = place(stPl, so.z0);
+        const shape = extrude(so.profile, so.z1 - so.z0);
+        if (so.type === 'duct') e = add(`IFCDUCTSEGMENT('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.RIGIDSEGMENT.)`);
+        else if (so.type === 'airterminal') e = add(`IFCAIRTERMINAL('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.DIFFUSER.)`);
+        else if (so.system === 'fire' && so.type === 'terminal') e = add(`IFCFIRESUPPRESSIONTERMINAL('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.SPRINKLER.)`);
+        else if (so.type === 'terminal') e = add(`IFCVALVE('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.NOTDEFINED.)`);
+        else if (so.system === 'hvac') e = add(`IFCUNITARYEQUIPMENT('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.SPLITSYSTEM.)`);
+        else e = add(`IFCFLOWTERMINAL('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag})`);
+      }
+      const props = { Katman: so.props?.layer, Sistem: sys.label };
+      if (so.props?.diaMm) { props.CapMm = so.props.diaMm; props.CapKaynagi = so.props.diaSrc === 'label' ? 'çizimdeki yazı' : 'varsayılan'; }
+      if (so.props?.block) props.Blok = so.props.block;
+      pset(e, 'DWG2BIM_Tesisat', props);
+      contained.push(e);
+      const key = so.system || 'other';
+      if (!systems.has(key)) systems.set(key, []);
+      systems.get(key).push(e);
+      continue;
+    }
     if (so.profile.length < 3 || so.z1 - so.z0 <= 1e-4) continue;
     const pl = place(stPl, so.z0);
     const shape = extrude(so.profile, so.z1 - so.z0);
@@ -135,6 +194,12 @@ export function writeIfc(build, { fileName = 'model.ifc', timestamp = new Date()
   }
   if (contained.length) add(`IFCRELCONTAINEDINSPATIALSTRUCTURE('${ifcGuid()}',$,$,$,(${contained.join(',')}),${storey})`);
   if (spaces.length) add(`IFCRELAGGREGATES('${ifcGuid()}',$,$,$,${storey},(${spaces.join(',')}))`);
+  for (const [key, elems] of systems) {
+    const sys = SYSTEMS[key] || SYSTEMS.other;
+    const ds = add(`IFCDISTRIBUTIONSYSTEM('${ifcGuid()}',$,${stepStr(sys.label)},$,$,${stepStr(sys.label)},.${sys.ifc}.)`);
+    add(`IFCRELASSIGNSTOGROUP('${ifcGuid()}',$,$,$,(${elems.join(',')}),$,${ds})`);
+    add(`IFCRELSERVICESBUILDINGS('${ifcGuid()}',$,$,$,${ds},(${building}))`);
+  }
 
   const ts = timestamp.toISOString().slice(0, 19);
   return [

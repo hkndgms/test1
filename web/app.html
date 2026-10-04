@@ -142,6 +142,39 @@ details.adv[open] .grid2 { margin-top: 8px; }
 .note { font-size: 12px; color: var(--muted); border-left: 3px solid var(--line); padding-left: 8px; margin: 0; }
 .foot { font-size: 11px; color: var(--muted); padding-top: 12px; }
 
+.syschips { display: flex; flex-wrap: wrap; gap: 4px; }
+.syschip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px 2px 4px; background: var(--field); cursor: pointer; }
+.syschip input { margin: 0; }
+.syschip.off { opacity: .45; }
+.syschip b { font: 500 11px var(--font-mono); color: var(--muted); }
+.ceil { display: grid; gap: 6px; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; background: var(--field); }
+.ceil.warn { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, var(--field)); }
+.ceil .src { font-size: 12px; color: var(--muted); }
+.ceil.warn .src { color: var(--warn); font-weight: 600; }
+.cands { display: flex; flex-wrap: wrap; gap: 4px; }
+.cands button { font: 11px var(--font-mono); border: 1px solid var(--line); border-radius: 3px; padding: 2px 6px; background: var(--panel); cursor: pointer; }
+.cands button:hover { border-color: var(--accent); }
+.meplayers { max-height: 380px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--field); }
+.ml { display: grid; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.ml.unknown { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.ml.ignored { opacity: .6; }
+.ml .h { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ml .h .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ml .h .ct { font: 11px var(--font-mono); color: var(--muted); }
+.ml .c { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
+.ml select, .ml input { font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+.ml input[type="number"] { width: 64px; font-family: var(--font-mono); }
+.badge { font: 600 10px/1 var(--font-ui); letter-spacing: .04em; text-transform: uppercase; border-radius: 3px; padding: 3px 5px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.badge.builtin { color: var(--muted); }
+.badge.ai { color: var(--accent); border-color: var(--accent); }
+.badge.user { color: var(--good); border-color: var(--good); }
+.badge.unknown { color: var(--warn); border-color: var(--warn); }
+.kb { display: grid; gap: 6px; border-top: 1px dashed var(--line); padding-top: 10px; }
+.kb ul { margin: 0; padding-left: 16px; font: 11px/1.5 var(--font-mono); color: var(--muted); max-height: 140px; overflow: auto; }
+.dlg { position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--bg) 55%, transparent); z-index: 5; }
+.dlg .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; max-width: 44ch; display: grid; gap: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+.dlg .card b { font: 700 17px var(--font-head); letter-spacing: .04em; text-transform: uppercase; }
+
 @media (max-width: 860px) {
   .app { height: auto; }
   .work { grid-template-columns: 1fr; }
@@ -238,9 +271,25 @@ details.adv[open] .grid2 { margin-top: 8px; }
         <div id="selPanel"></div>
       </section>
 
+      <section class="step" id="stepMep">
+        <h2><span class="no">05</span>Mekanik tesisat</h2>
+        <p class="hint" id="mepNote">Çizim açıldığında tesisat katmanları bilgi bankasıyla sınıflandırılır. Bilinmeyenler sarı işaretlenir; yapay zekâ asistanına sorabilir veya elle seçebilirsiniz.</p>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="mepOn" checked> Tesisatı göster</label>
+          <label class="check"><input type="checkbox" id="archOn" checked> Mimariyi göster (3B)</label>
+        </div>
+        <div class="syschips" id="sysChips"></div>
+        <div class="ceil" id="ceilBox">
+          <div class="field"><label for="ceilCm">Asma tavan kotu (tesisatın asıldığı yükseklik)</label><div class="unit" data-u="cm"><input type="number" id="ceilCm" min="150" step="5"></div></div>
+          <span class="src" id="ceilSrc"></span>
+          <div class="cands" id="ceilCands"></div>
+        </div>
+        <div class="meplayers" id="mepLayers"><div class="ml hint">Önce bir çizim açın.</div></div>
+      </section>
+
       <details class="step" id="stepAi">
-        <summary><span class="no">05</span>Yapay zekâ asistanı</summary>
-        <p class="hint">1) Komutu oluşturup kopyalayın. 2) Claude, ChatGPT gibi bir yapay zekâya yapıştırın. 3) Gelen cevabın tamamını aşağıya yapıştırıp uygulayın. Katmanlar, ölçüler, kapı/pencere türleri ve mahal adları otomatik ayarlanır.</p>
+        <summary><span class="no">06</span>Yapay zekâ asistanı</summary>
+        <p class="hint">1) Komutu oluşturup kopyalayın. 2) Claude, ChatGPT gibi bir yapay zekâya yapıştırın. 3) Gelen cevabın tamamını aşağıya yapıştırıp uygulayın. Katmanlar, tesisat sınıfları, kotlar, kapı/pencere türleri ve mahal adları ayarlanır; yapay zekânın önerdiği genel kurallar bilgi bankasına eklenir ve sonraki projelerde de kullanılır.</p>
         <div class="row">
           <button class="btn small" id="btnPrompt" disabled>Komut oluştur</button>
           <button class="btn small" id="btnCopy" disabled>Kopyala</button>
@@ -250,16 +299,26 @@ details.adv[open] .grid2 { margin-top: 8px; }
         <textarea id="answerIn" placeholder="Yapay zekânın cevabını buraya yapıştırın" aria-label="Yapay zekâ cevabı"></textarea>
         <div class="row"><button class="btn small primary" id="btnApply" disabled>Cevabı uygula</button></div>
         <div class="status" id="aiStatus"></div>
+        <div class="kb">
+          <div class="row"><b style="font:600 13px var(--font-ui)">Bilgi bankası</b><span class="hint" id="kbStats"></span></div>
+          <ul id="kbList"></ul>
+          <div class="row">
+            <button class="btn small" id="btnKbExport">Dışa aktar (JSON)</button>
+            <label class="btn small" for="kbInput">İçe aktar</label>
+            <button class="btn small" id="btnKbReset">Öğrenilenleri sil</button>
+            <input type="file" id="kbInput" accept=".json,application/json" hidden>
+          </div>
+        </div>
       </details>
 
       <section class="step" id="stepExport">
-        <h2><span class="no">06</span>Dışa aktar</h2>
+        <h2><span class="no">07</span>Dışa aktar</h2>
         <button class="btn primary" id="btnExport" disabled>IFC dosyasını indir</button>
         <p class="note">IFC açık BIM standardıdır (ISO 16739). Revit'te <b>Dosya › Aç › IFC</b> ile açıp <b>Farklı Kaydet › RVT</b> yapılır. FreeCAD ve Blender (Bonsai) ile ücretsiz açılır. Bu sayfada dosya ZIP içinde iner.</p>
       </section>
 
       <details class="step rvt" id="stepRvt">
-        <summary><span class="no">07</span>RVT inceleme</summary>
+        <summary><span class="no">08</span>RVT inceleme</summary>
         <p class="hint">Revit olmadan bir RVT dosyasından okunabilenler: sürüm, önizleme resmi, bağlantılar ve tip adları. 3B geometri kapalı formatta olduğu için okunamaz.</p>
         <div class="row">
           <label class="btn small" for="rvtInput">RVT seç</label>
@@ -300,6 +359,15 @@ details.adv[open] .grid2 { margin-top: 8px; }
             <button class="btn small" id="btnFrame3d">Ortala</button>
             <button class="btn small" id="btnSpaces">Mahalleri göster</button>
             <button class="btn small on" id="btnRoof">Tavan</button>
+          </div>
+        </div>
+        <div class="dlg" id="ceilDlg" hidden>
+          <div class="card" role="dialog" aria-labelledby="ceilDlgTitle">
+            <b id="ceilDlgTitle">Asma tavan kotu gerekli</b>
+            <span class="hint">Projede asma tavan / tesisat kotu bulunamadı. Tavana asılan boru, kanal ve cihazlar bu yüksekliğe yerleştirilecek. Döşemeden itibaren santimetre girin.</span>
+            <div class="field"><label for="ceilDlgCm">Asma tavan kotu</label><div class="unit" data-u="cm"><input type="number" id="ceilDlgCm" min="150" step="5" value="280"></div></div>
+            <div><div class="hint" id="ceilDlgCandHint">Çizimde geçen kotlar:</div><div class="cands" id="ceilDlgCands"></div></div>
+            <div class="row"><button class="btn primary" id="ceilDlgOk">Uygula</button><button class="btn" id="ceilDlgLater">Şimdilik 280 cm ile devam et</button></div>
           </div>
         </div>
         <div class="overlay" id="overlay"><div class="card"><b>Çizim yükleniyor</b><span class="hint" id="overlayMsg">Örnek proje açılıyor…</span></div></div>

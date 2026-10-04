@@ -92,12 +92,14 @@ export function flattenDwg(db, { maxPoints = 6e6 } = {}) {
   const blocks = new Map();
   for (const b of db.tables?.BLOCK_RECORD?.entries || []) blocks.set(b.name, b);
 
-  const prims = []; // {l, c, closed, pts:number[]}
+  const prims = []; // {l, c, closed, pts:number[], b: blok örneği (-1: yok)}
+  const instances = []; // adlı blok yerleşimleri: {name, rot, layer}
   const texts = []; // {l, x, y, h, rot, s}
   const inserts = []; // üst seviye blok yerleşimleri (bilgi amaçlı)
   let points = 0;
   let truncated = false;
 
+  let curInst = -1;
   function emit(l, c, closed, local, m) {
     if (local.length < 4) return;
     if (points + local.length / 2 > maxPoints) { truncated = true; return; }
@@ -109,7 +111,7 @@ export function flattenDwg(db, { maxPoints = 6e6 } = {}) {
     }
     points += local.length / 2;
     layers[l].count++;
-    prims.push({ l, c, closed, pts });
+    prims.push({ l, c, closed, pts, b: curInst });
   }
 
   function color(e, inhColor, l) {
@@ -205,7 +207,14 @@ export function flattenDwg(db, { maxPoints = 6e6 } = {}) {
           lm = mul(lm, [1, 0, 0, 1, -bp.x, -bp.y]);
           const wm = mul(om, lm);
           if (depth === 0) inserts.push({ name: e.name, layer: lname, x: wm[4], y: wm[5] });
+          // adlı bloklar (anonim *U, A$C, G$C grupları hariç) cihaz tanıma için örnek kaydı alır
+          const prevInst = curInst;
+          if (!/^(\*|[AG]\$C)/i.test(b.name)) {
+            curInst = instances.length;
+            instances.push({ name: b.name, rot: Math.atan2(wm[2], wm[0]), layer: l });
+          }
           walk(b.entities || [], wm, l, c === -1 ? null : c, depth + 1);
+          curInst = prevInst;
           if (Array.isArray(e.attribs)) walk(e.attribs, m, l, c, depth + 1);
           break;
         }
@@ -230,6 +239,7 @@ export function flattenDwg(db, { maxPoints = 6e6 } = {}) {
     prims,
     texts,
     inserts,
+    instances,
     bbox: [minX, minY, maxX, maxY],
     stats: { prims: prims.length, texts: texts.length, points, truncated },
   };

@@ -1,6 +1,7 @@
 // 2B plan görüntüleyici: canvas üzerinde DWG çizgileri + algılanan model.
 import { aciToHex } from './aci.js';
 import { pointInPoly } from './detect.js';
+import { SYSTEMS } from './kb.js';
 
 const KIND_COLOR = { window: 'win', door: 'door', empty: 'empty' };
 
@@ -52,6 +53,73 @@ export class Plan2D {
   }
 
   setSelected(id) { this.selected = id; this.draw(); }
+
+  // Tesisat katmanı: mep = extractMep çıktısı, profiles = Map<layer, profil>
+  setMep(mep, profiles, { visible = true, systems = null } = {}) {
+    this.mep = mep;
+    this.mepProfiles = profiles;
+    this.mepVisible = visible;
+    this.mepSystems = systems;
+    this.draw();
+  }
+
+  _mepOn(l) {
+    const p = this.mepProfiles?.get(l);
+    if (!p || p.kind === 'ignore' || p.hidden) return null;
+    if (this.mepSystems && !this.mepSystems.has(p.system)) return null;
+    return p;
+  }
+
+  _drawMep(ctx, scale, world) {
+    const m = this.mep;
+    world();
+    const unitScale = this.mepUnitScale || 1; // çizim birimi -> cm
+    const poly = (p) => { ctx.beginPath(); ctx.moveTo(p[0][0], p[0][1]); for (let i = 1; i < p.length; i++) ctx.lineTo(p[i][0], p[i][1]); ctx.closePath(); };
+    for (const d of [...m.ducts, ...m.boxes]) {
+      const p = this._mepOn(d.l);
+      if (!p) continue;
+      const col = (SYSTEMS[p.system] || SYSTEMS.other).color;
+      poly(d.poly);
+      ctx.globalAlpha = d.id === this.selected ? 0.75 : 0.35;
+      ctx.fillStyle = col;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = (d.id === this.selected ? 3 : 1) / scale;
+      ctx.strokeStyle = col;
+      ctx.stroke();
+    }
+    ctx.lineCap = 'round';
+    for (const pp of m.pipes) {
+      const p = this._mepOn(pp.l);
+      if (!p) continue;
+      const diaCm = pp.diaSrc === 'label' && pp.diaCm ? pp.diaCm : p.sizeCm || 2.5;
+      ctx.lineWidth = Math.max(diaCm / unitScale, (pp.id === this.selected ? 5 : 2) / scale);
+      ctx.strokeStyle = pp.id === this.selected ? this.colors().accent : (SYSTEMS[p.system] || SYSTEMS.other).color;
+      ctx.beginPath();
+      ctx.moveTo(pp.pts[0][0], pp.pts[0][1]);
+      for (let i = 1; i < pp.pts.length; i++) ctx.lineTo(pp.pts[i][0], pp.pts[i][1]);
+      ctx.stroke();
+    }
+    ctx.lineCap = 'butt';
+  }
+
+  _hitMep(x, y) {
+    const m = this.mep;
+    if (!m || !this.mepVisible) return null;
+    const tol = 6 / this.view.scale;
+    for (const pp of m.pipes) {
+      if (!this._mepOn(pp.l)) continue;
+      for (let i = 1; i < pp.pts.length; i++) {
+        const [ax, ay] = pp.pts[i - 1], [bx, by] = pp.pts[i];
+        const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+        const t = L2 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / L2)) : 0;
+        if (Math.hypot(ax + t * dx - x, ay + t * dy - y) <= tol) return pp.id;
+      }
+    }
+    for (const b of m.boxes) if (this._mepOn(b.l) && pointInPoly(x, y, b.poly)) return b.id;
+    for (const d of m.ducts) if (this._mepOn(d.l) && pointInPoly(x, y, d.poly)) return d.id;
+    return null;
+  }
 
   fit(bb) {
     if (!bb || !isFinite(bb[0])) return;
@@ -135,6 +203,7 @@ export class Plan2D {
     }
     ctx.globalAlpha = 1;
     if (this.model) this._drawModel(ctx, C, scale, world);
+    if (this.mep && this.mepVisible) this._drawMep(ctx, scale, world);
     if (this.region) {
       world();
       const [a, b, c, d] = this.region;
@@ -224,6 +293,8 @@ export class Plan2D {
   }
 
   hitTest(x, y) {
+    const hm = this._hitMep(x, y);
+    if (hm) return hm;
     const m = this.model;
     if (!m) return null;
     const ov = this.overrides;
@@ -314,6 +385,11 @@ export class Plan2D {
     const [a, b] = [...this._pointers.values()];
     return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   }
+}
+
+export function findMepById(mep, id) {
+  if (!mep || !id) return null;
+  return mep.pipes.find((p) => p.id === id) || mep.ducts.find((d) => d.id === id) || mep.boxes.find((b) => b.id === id) || null;
 }
 
 export function findById(m, id) {

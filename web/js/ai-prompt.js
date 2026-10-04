@@ -2,8 +2,9 @@
 // yapay zekânın döndürdüğü JSON cevabını çözümler.
 
 import { UNIT_NAMES } from './detect.js';
+import { SYSTEMS, KINDS } from './kb.js';
 
-export function buildPrompt({ drawing, roles, params, buildParams, model, fileName }) {
+export function buildPrompt({ drawing, roles, params, buildParams, model, fileName, mepStats = [], mepProfiles = new Map(), elevations = null, ceiling = null, islands = [] }) {
   const layerRows = drawing.layers
     .map((l, i) => ({ i, ...l }))
     .filter((l) => l.count > 0)
@@ -20,6 +21,18 @@ export function buildPrompt({ drawing, roles, params, buildParams, model, fileNa
   const openingRows = (model?.openings || []).map((o) => `${o.id}\t${Math.round(o.width * model.unitScale)}\t${o.exterior ? 'dış' : 'iç'}\t${o.kind}${o.weak ? '\tzayıf' : ''}`);
   const roomRows = (model?.rooms || []).map((r) => `${r.id}\t${(Math.abs(r.area) * model.unitScale ** 2 / 1e4).toFixed(1)} m²\t${r.name || '(adsız)'}`);
 
+  // Tesisat katmanları: bilinmeyenler önce, sonra kullanılanlar, sonra yok sayılan tesisat benzerleri
+  const mepRows = mepStats.map((st) => ({ st, p: mepProfiles.get(st.l) || {} }))
+    .filter(({ st, p }) => (p.kind && p.kind !== 'ignore') || p.unknown || /^m[-_ ]|vrf|hvac|klima|yang|fire|daikin|tesisat/i.test(st.name) || st.count >= 200)
+    .sort((a, b) => (a.p.unknown ? 0 : 1) - (b.p.unknown ? 0 : 1) || b.st.count - a.st.count)
+    .slice(0, 70)
+    .map(({ st, p }) => {
+      const cur = p.unknown && !p.kind ? 'BİLİNMİYOR' : p.kind === 'ignore' ? `yok sayılıyor (${p.note || ''})` : `${p.kind}/${p.system}/${p.elevRef === 'floor' ? 'döşeme' : 'tavan'}${p.elevOffsetCm >= 0 ? '+' : ''}${p.elevOffsetCm ?? 0}cm/ölçü ${p.sizeCm ?? '-'}cm [${p.source}]`;
+      const extra = [st.blocks.length ? 'bloklar: ' + st.blocks.join(', ') : '', st.texts.length ? 'yazılar: ' + st.texts.slice(0, 5).join(' ; ') : ''].filter(Boolean).join(' | ');
+      return `${st.name}\t${st.count} nesne (açık ${st.open}, kapalı ${st.closed}), toplam ${st.lengthM} m, tipik boyut ${st.typicalCm} cm\t→ ${cur}${extra ? '\t' + extra : ''}`;
+    });
+  const kotRows = (elevations?.candidates || []).map((k) => `+${(k.cm / 100).toFixed(2)} (${k.count} kez)`).join(', ');
+
   return `Sen bir mimari BIM asistanısın. "DWG2BIM" adlı bir tarayıcı uygulaması bir AutoCAD DWG kat planından 3B BIM modeli (IFC) üretiyor. Aşağıda uygulamanın çizimden çıkardığı özet var. Görevin: uygulamanın modeli doğru kurması için gereken ayarları SADECE aşağıdaki JSON biçiminde geri vermek.
 
 KURALLAR
@@ -33,6 +46,16 @@ KURALLAR
 - "rooms": adsız veya yanlış adlı mahaller için isim önerebilirsin.
 - Bilmediğin alanı hiç yazma.
 
+MEKANİK TESİSAT (asıl önem burada)
+- "mep": aşağıdaki TESİSAT KATMANLARI listesindeki katmanlar için (özellikle BİLİNMİYOR olanlar ve yanlış sınıflandırılmış görünenler) karar ver. Katman adını listede göründüğü gibi yaz.
+  kind: ${Object.keys(KINDS).map((k) => `"${k}"`).join(', ')} — pipe=tek çizgi boru, air=kapalı şekil kanal/menfez, equipment=cihaz (blok/şekil), terminal=küçük sembol (sprinkler başlığı, vana), ignore=çizilmeyecek (yazı, ölçü, şema, lejant, etki dairesi, başka projeden kalıntı).
+  system: ${Object.keys(SYSTEMS).map((k) => `"${k}"`).join(', ')}.
+  elevRef: "ceiling" (asma tavana göre) veya "floor" (döşemeye göre); elevOffsetCm: bu referanstan fark (tavan altı negatif); sizeCm: boru çapı / cihaz yüksekliği / kanal yüksekliği.
+- "learn": GELECEKTEKİ PROJELERDE DE geçerli olacak GENEL kurallar öner. Bu uygulama öğrenir: kuralları bilgi bankasına kaydeder ve sonraki dosyalarda katman adlarına uygular. pattern, Türkçe karakterleri katlanmış (İ→I, Ş→S, Ğ→G, Ü→U, Ö→O, Ç→C) BÜYÜK harf katman adı üzerinde çalışan bir JavaScript düzenli ifadesidir (ör. "YANGIN[\\s._-]*DOLAB|HYDRANT"). Projeye özgü ad parçaları (proje kodu, tarih) koyma; meslekte yaygın adlandırmaları yakalayan kalıplar yaz.
+- "ignore": aynı mantıkla genel TEMİZLİK kuralları (hangi katman adları her zaman çöp/çizilmez): {"pattern": "...", "reason": "..."}.
+- "ceilingCm": asma tavan kotu (cm) — yalnız çizimden makul bir çıkarım yapabiliyorsan; "ceilingReason" ile gerekçesini yaz. Emin değilsen yazma, uygulama kullanıcıya soracak.
+- "questions": bu katmanlardan emin olamadıkların için kullanıcıya sorulacak kısa sorular (en çok 3).
+
 İSTENEN CEVAP BİÇİMİ
 \`\`\`json
 {
@@ -45,6 +68,11 @@ KURALLAR
   },
   "openings": { "O12": { "kind": "door", "heightCm": 220 }, "O3": { "kind": "window", "sillCm": 100, "heightCm": 140 } },
   "rooms": { "R4": { "name": "..." } },
+  "mep": { "M-YANGIN": { "kind": "terminal", "system": "fire", "elevRef": "ceiling", "elevOffsetCm": -5, "sizeCm": 6 } },
+  "learn": [ { "pattern": "YANGIN[\\s._-]*DOLAB|HYDRANT|\\bIKV\\b", "kind": "equipment", "system": "fire", "elevRef": "floor", "elevOffsetCm": 60, "sizeCm": 90, "note": "yangın dolabı" } ],
+  "ignore": [ { "pattern": "KOLON[\\s._-]*SEMA|RISER[\\s._-]*DIAGRAM", "reason": "kolon şeması" } ],
+  "ceilingCm": 290, "ceilingReason": "...",
+  "questions": ["..."],
   "notes": "kısa açıklama"
 }
 \`\`\`
@@ -70,6 +98,14 @@ Boşluklar (id, genişlik cm, konum, şu anki tür):
 ${openingRows.join('\n') || '-'}
 Mahaller (id, alan, ad):
 ${roomRows.join('\n') || '-'}
+
+TESİSAT KATMANLARI (asıl plan bölgesinde; ad, içerik özeti → uygulamanın şu anki kararı [kaynak])
+${mepRows.join('\n') || '-'}
+
+KOT BİLGİSİ
+Asma tavan kotu: ${ceiling ? (ceiling.source === 'project' ? ceiling.cm + ' cm (projeden: ' + ceiling.text + ')' : ceiling.source === 'default' ? 'projede bulunamadı (varsayılan ' + ceiling.cm + ' cm)' : ceiling.cm + ' cm (' + ceiling.source + ')') : '-'}
+Çizimde geçen kot yazıları: ${kotRows || '-'}
+Paftadaki ayrık çizim grubu sayısı: ${islands.length} (asıl plan dışındakiler yok sayıldı)
 `;
 }
 
