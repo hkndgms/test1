@@ -2,6 +2,7 @@
 // 3B önizleme, IFC dışa aktarma, yapay zekâ asistanı ve RVT inceleme.
 import { detect, DEFAULT_PARAMS, UNIT_NAMES, UNIT_TO_CM } from './detect.js';
 import { autoSetup } from './auto.js';
+import { padBox } from './islands.js';
 import { KnowledgeBase, SYSTEMS, KINDS, fold } from './kb.js';
 import { layerStats, extractMep, detectElevations } from './mep.js';
 import { buildSolids, DEFAULT_BUILD } from './build3d.js';
@@ -44,6 +45,8 @@ const state = {
   ceilingAsked: false,
   elevations: null,
   aiReport: null, // {report, issues}
+  parts: [], // seçili pafta bölümleri (ada kimlikleri)
+  partRegions: null,
 };
 
 // ------------------------------------------------------------ yardımcılar
@@ -242,6 +245,88 @@ function autoRoles() {
   state.autoRegion = a.region;
   state.planIsland = a.planIsland;
   state.islands = a.islands;
+  state.parts = a.planIsland ? [a.planIsland.id] : [];
+  state.partRegions = null;
+}
+
+// ------------------------------------------------------------ pafta bölümleri
+// Her bölüm için kaba içerik sayımı (duvar adaylı / tesisat katmanları)
+function partStats() {
+  const d = state.drawing;
+  const list = (state.islands || []).filter((i) => i.n >= 100).slice(0, 14);
+  const cls = new Map();
+  const isMep = (l) => { let c = cls.get(l); if (c === undefined) { const k = state.kb.classify(d.layers[l].name).kind; cls.set(l, (c = !!k && k !== 'ignore')); } return c; };
+  const wallRe = /duvar|wall/i;
+  for (const isl of list) { isl._w = 0; isl._m = 0; }
+  const byArea = list.slice().sort((a, b) => (a.bbox[2] - a.bbox[0]) * (a.bbox[3] - a.bbox[1]) - (b.bbox[2] - b.bbox[0]) * (b.bbox[3] - b.bbox[1]));
+  for (const p of d.prims) {
+    const x = p.pts[0], y = p.pts[1];
+    const isl = byArea.find((i) => x >= i.bbox[0] && x <= i.bbox[2] && y >= i.bbox[1] && y <= i.bbox[3]);
+    if (!isl) continue;
+    if (wallRe.test(d.layers[p.l].name)) isl._w++;
+    if (isMep(p.l)) isl._m++;
+  }
+  return list;
+}
+
+function renderParts() {
+  const box = $('partsBox');
+  const d = state.drawing;
+  if (!d || (state.islands || []).filter((i) => i.n >= 100).length < 2) { box.hidden = true; return; }
+  box.hidden = false;
+  if (!state._partList || state._partListFor !== d) { state._partList = partStats(); state._partListFor = d; }
+  const toCm = UNIT_TO_CM[state.units] ?? 1;
+  const sel = new Set(state.parts);
+  $('partsList').innerHTML = state._partList.map((i) => {
+    const w = ((i.bbox[2] - i.bbox[0]) * toCm / 100).toFixed(0), h = ((i.bbox[3] - i.bbox[1]) * toCm / 100).toFixed(0);
+    const tags = [i._w ? `duvar ${i._w}` : '', i._m ? `tesisat ${i._m}` : ''].filter(Boolean).join(' · ') || 'yalnız çizim/yazı';
+    return `<li class="${sel.has(i.id) ? 'on' : ''}"><label><input type="checkbox" data-part="${i.id}" ${sel.has(i.id) ? 'checked' : ''}>
+      <span class="pl"><b>${esc(i.label || 'Bölüm ' + i.id)}</b><span class="hint">${w}×${h} m · ${i.n.toLocaleString('tr')} nesne · ${tags}</span></span></label>
+      <button class="btn small" data-zoom="${i.id}">Göster</button></li>`;
+  }).join('');
+  const n = state._partList.filter((i) => sel.has(i.id)).reduce((s, i) => s + i.n, 0);
+  $('partsNote').textContent = n > 300000 ? `Seçili bölümlerde ${n.toLocaleString('tr')} nesne var; işlem birkaç saniye sürebilir.` : '';
+}
+$('partsList').addEventListener('click', (e) => {
+  const z = +e.target.dataset.zoom;
+  if (z) { const isl = state.islands.find((i) => i.id === z); if (isl) { showTab('plan'); plan.fit(isl.bbox); } }
+});
+$('partsList').addEventListener('change', (e) => {
+  const id = +e.target.dataset.part;
+  if (!id) return;
+  const set = new Set(state.parts);
+  if (e.target.checked) set.add(id); else set.delete(id);
+  state.parts = [...set];
+  $('btnParts').disabled = !state.parts.length;
+  e.target.closest('li').classList.toggle('on', e.target.checked);
+});
+// Seçili bölümleri işle: her bölüm kendi katmanları ve birimiyle kurulur, sonuçlar birleşir
+$('btnParts').onclick = () => processParts(state.parts);
+function processParts(ids) {
+  const d = state.drawing;
+  const isls = ids.map((id) => state.islands.find((i) => i.id === id)).filter(Boolean);
+  if (!d || !isls.length) return;
+  status(`${isls.length} bölüm işleniyor…`);
+  overlay(`${isls.length} bölüm işleniyor…`, 'İşleniyor');
+  setTimeout(() => {
+    const roles = { wall: new Set(), column: new Set(), text: new Set(), door: new Set(), window: new Set() };
+    const regions = [];
+    for (const isl of isls) {
+      const a = autoSetup(d, { params: state.params, units: state.units, kb: state.kb, islands: state.islands, onlyIslands: [isl] });
+      for (const k of Object.keys(roles)) for (const l of a.roles[k] || []) roles[k].add(l);
+      regions.push(a.region || padBox(isl.bbox, 0.02));
+    }
+    state.roles = roles;
+    state.region = null;
+    state.partRegions = regions;
+    state.autoRegion = regions[0];
+    state.planIsland = isls[0];
+    renderLayers();
+    runDetect();
+    const all = regions.reduce((b, r) => [Math.min(b[0], r[0]), Math.min(b[1], r[1]), Math.max(b[2], r[2]), Math.max(b[3], r[3])], [Infinity, Infinity, -Infinity, -Infinity]);
+    plan.fit(all);
+    overlay(null);
+  }, 30);
 }
 
 function roleOf(i) {
@@ -323,15 +408,42 @@ $('btnDetect').onclick = () => runDetect();
 // ------------------------------------------------------------ algılama
 const emptyModel = () => ({ walls: [], columns: [], openings: [], rooms: [], outline: null, unitScale: UNIT_TO_CM[state.units] ?? 1, stats: {} });
 
+// İşlenecek alanlar: elle çizilen bölge > seçilen pafta bölümleri > otomatik bölge
+function currentRegions() {
+  if (state.region) return [state.region];
+  if (state.partRegions?.length) return state.partRegions;
+  return [state.autoRegion || null];
+}
+// Birden çok bölümün sonuçlarını birleştir; kimliklere ".bölüm" eki (tür harfi başta kalır)
+function suffixIds(list, i, multi) {
+  if (!multi) return list;
+  return list.map((x) => ({ ...x, id: x.id + '.' + (i + 1), ...(x.hostWall ? { hostWall: x.hostWall + '.' + (i + 1) } : {}) }));
+}
+function mergeModels(models) {
+  if (models.length === 1) return { ...models[0], outlines: models[0].outline ? [models[0].outline] : [] };
+  const multi = models.length > 1;
+  const out = { walls: [], columns: [], openings: [], rooms: [], outlines: [], outline: null, unitScale: models[0].unitScale, stats: {} };
+  models.forEach((m, i) => {
+    out.walls.push(...suffixIds(m.walls, i, multi));
+    out.columns.push(...suffixIds(m.columns, i, multi));
+    out.openings.push(...suffixIds(m.openings, i, multi));
+    out.rooms.push(...suffixIds(m.rooms, i, multi));
+    if (m.outline) out.outlines.push(m.outline);
+  });
+  out.outline = out.outlines[0] || null;
+  return out;
+}
+
 function runDetect() {
   if (!state.drawing) return;
   const t0 = performance.now();
-  const region = state.region || state.autoRegion || null;
+  const regions = currentRegions();
   plan.region = state.region;
-  state.model = state.roles.wall.size ? detect(state.drawing, {
+  plan.partRegions = state.region ? null : state.partRegions;
+  state.model = state.roles.wall.size ? mergeModels(regions.map((region) => detect(state.drawing, {
     units: state.units, wallLayers: state.roles.wall, columnLayers: state.roles.column,
     textLayers: state.roles.text, doorLayers: state.roles.door, windowLayers: state.roles.window, region, params: state.params,
-  }) : emptyModel();
+  }))) : emptyModel();
   state.overrides = {};
   state.selected = null;
   plan.setModel(state.model, state.overrides);
@@ -344,7 +456,8 @@ function runDetect() {
   const ms = Math.round(performance.now() - t0);
   if (!state.roles.wall.size && !mepCount()) status('Duvar katmanı seçilmedi ve tesisat bulunamadı. Katman listesinden en az bir katmanı "Duvar" yapın.', 'err');
   else if (!state.model.walls.length && !mepCount()) status('Seçilen katmanlarda duvar bulunamadı. Başka bir katman deneyin veya "En kalın duvar" ayarını artırın.', 'err');
-  else status(`Algılandı (${ms} ms). Plandaki öğelere tıklayarak düzenleyebilirsiniz.`, 'ok');
+  else status(`Algılandı (${ms} ms${regions.length > 1 ? `, ${regions.length} bölüm` : ''}). Plandaki öğelere tıklayarak düzenleyebilirsiniz.`, 'ok');
+  renderParts();
 }
 
 // ------------------------------------------------------------ tesisat
@@ -361,12 +474,30 @@ function profileFor(l) {
 function runMep(rebuild = true) {
   const d = state.drawing;
   if (!d) return;
-  const region = state.region || state.autoRegion || null;
+  const regions = currentRegions();
+  const region = regions[0];
   const arch = new Set([...state.roles.wall, ...state.roles.column, ...state.roles.door, ...state.roles.window, ...state.roles.text]);
-  state.mepStats = layerStats(d, region, state.units).filter((st) => !arch.has(st.l));
+  // katman özetleri: bölümlerin toplamı
+  const byL = new Map();
+  for (const r of regions) for (const st of layerStats(d, r, state.units)) {
+    if (arch.has(st.l)) continue;
+    const cur = byL.get(st.l);
+    if (!cur) { byL.set(st.l, { ...st }); continue; }
+    cur.count += st.count; cur.open += st.open; cur.closed += st.closed; cur.lengthM = +(cur.lengthM + st.lengthM).toFixed(1);
+    cur.blocks = [...new Set([...cur.blocks, ...st.blocks])].slice(0, 4);
+    cur.texts = [...new Set([...cur.texts, ...st.texts])].slice(0, 8);
+  }
+  state.mepStats = [...byL.values()].sort((a, b) => b.count - a.count);
   state.mepProfiles = new Map();
   for (const st of state.mepStats) state.mepProfiles.set(st.l, profileFor(st.l));
-  state.mep = extractMep(d, { region, units: state.units, profiles: state.mepProfiles });
+  const parts = regions.map((r) => extractMep(d, { region: r, units: state.units, profiles: state.mepProfiles }));
+  const multi = parts.length > 1;
+  state.mep = {
+    pipes: parts.flatMap((m, i) => suffixIds(m.pipes, i, multi)),
+    ducts: parts.flatMap((m, i) => suffixIds(m.ducts, i, multi)),
+    boxes: parts.flatMap((m, i) => suffixIds(m.boxes, i, multi)),
+    dropped: parts.reduce((acc, m) => { for (const [k, v] of Object.entries(m.dropped)) acc[k] = (acc[k] || 0) + v; return acc; }, {}),
+  };
   plan.mepUnitScale = UNIT_TO_CM[state.units] ?? 1;
   plan.setMep(state.mep, state.mepProfiles, { visible: state.mepVisible, systems: visibleSystems() });
   // kot: projede varsa oradan, yoksa kullanıcıya sor
@@ -463,12 +594,15 @@ function renderSelInner() {
         <button data-kind="window" class="${kind === 'window' ? 'on' : ''}">Pencere</button>
         <button data-kind="door" class="${kind === 'door' ? 'on' : ''}">Kapı</button>
         <button data-kind="empty" class="${kind === 'empty' ? 'on' : ''}">Geçiş</button>
+        <button data-kind="solid" class="${kind === 'solid' ? 'on' : ''}">Dolu</button>
       </div>
+      ${el.why ? `<p class="hint">Program kararı: ${esc(el.why)}</p>` : ''}
       <div class="grid2">
         ${kind === 'window' ? numField('selSill', 'Parapet', ov.sillCm ?? B.windowSillCm) + numField('selH', 'Pencere yüksekliği', ov.heightCm ?? B.windowHeightCm) : ''}
         ${kind === 'door' ? numField('selH', 'Kapı yüksekliği', ov.heightCm ?? B.doorHeightCm) : ''}
       </div>
       ${kind === 'empty' ? '<p class="hint">Geçiş: kapı, pencere ve lento oluşturulmaz.</p>' : ''}
+      ${kind === 'solid' ? '<p class="hint">Dolu: boşluk tam yükseklikte duvarla kapatılır.</p>' : ''}
       <div class="row"><button class="btn small" id="selDel">Boşluğu sil</button></div>`;
   } else if (id[0] === 'W') {
     html = `<div class="row"><b>Duvar ${id}</b><span class="hint">${cm(el.thickness)} cm kalınlık · ${(cm(el.length || 0) / 100).toFixed(2)} m · ${el.exterior ? 'dış' : 'iç'}</span></div>
@@ -888,7 +1022,7 @@ function applyAnswer() {
       if (!ids.has(id) || !o) continue;
       const patch = {};
       if (o.kind === 'delete') patch.deleted = true;
-      else if (['door', 'window', 'empty'].includes(o.kind)) patch.kind = o.kind;
+      else if (['door', 'window', 'empty', 'solid'].includes(o.kind)) patch.kind = o.kind;
       if (typeof o.heightCm === 'number') patch.heightCm = o.heightCm;
       if (typeof o.sillCm === 'number') patch.sillCm = o.sillCm;
       state.overrides[id] = { ...(state.overrides[id] || {}), ...patch };

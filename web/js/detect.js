@@ -260,6 +260,87 @@ export function buildFaces(segs, tol, capRange = null) {
   return { faces, nodes };
 }
 
+// ---------------------------------------------------------------- açık uçları kapatma
+// Duvar çizgilerinin açıkta kalan uçları için iki onarım:
+// 1) Uzatma: uç, birkaç cm ötedeki bir çizgiye değmiyorsa ona kadar uzatılır.
+// 2) Kapak: duvar kalınlığı mesafesindeki paralel çizgiye dik bir kapak eklenir
+//    (uçlar aynı hizada bitmese de; ör. bir çizgi diğerinden uzun çizilmişse).
+export function closeOpenEnds(segs, tol, capMin, capMax, extend) {
+  if (!segs.length || segs.length > 50000) return segs;
+  let minX = Infinity, minY = Infinity;
+  for (const s of segs) { minX = Math.min(minX, s[0], s[2]); minY = Math.min(minY, s[1], s[3]); }
+  const cell = Math.max(capMax * 2, extend * 2, tol * 8);
+  const grid = new Map();
+  const key = (i, j) => i * 92821 + j;
+  segs.forEach((s, idx) => {
+    const i0 = Math.floor((Math.min(s[0], s[2]) - minX) / cell), i1 = Math.floor((Math.max(s[0], s[2]) - minX) / cell);
+    const j0 = Math.floor((Math.min(s[1], s[3]) - minY) / cell), j1 = Math.floor((Math.max(s[1], s[3]) - minY) / cell);
+    if ((i1 - i0 + 1) * (j1 - j0 + 1) > 2000) return;
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const k = key(i, j);
+      let a = grid.get(k);
+      if (!a) grid.set(k, (a = []));
+      a.push(idx);
+    }
+  });
+  const near = (x, y) => {
+    const i = Math.floor((x - minX) / cell), j = Math.floor((y - minY) / cell);
+    const out = new Set();
+    for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) for (const n of grid.get(key(i + di, j + dj)) || []) out.add(n);
+    return out;
+  };
+  const distToSeg = (x, y, s) => {
+    const dx = s[2] - s[0], dy = s[3] - s[1], L2 = dx * dx + dy * dy;
+    const t = L2 ? Math.max(0, Math.min(1, ((x - s[0]) * dx + (y - s[1]) * dy) / L2)) : 0;
+    return Math.hypot(s[0] + t * dx - x, s[1] + t * dy - y);
+  };
+  const added = [];
+  for (let idx = 0; idx < segs.length; idx++) {
+    const s = segs[idx];
+    const L = Math.hypot(s[2] - s[0], s[3] - s[1]);
+    if (L < tol) continue;
+    for (const end of [0, 1]) {
+      const px = end ? s[2] : s[0], py = end ? s[3] : s[1];
+      const vx = (end ? s[2] - s[0] : s[0] - s[2]) / L, vy = (end ? s[3] - s[1] : s[1] - s[3]) / L; // dışa doğru
+      const cand = near(px, py);
+      // uç başka bir çizgiye değiyor mu?
+      let connected = false;
+      for (const n of cand) if (n !== idx && distToSeg(px, py, segs[n]) <= tol) { connected = true; break; }
+      if (connected) continue;
+      // 1) uzatma
+      let best = null;
+      for (const n of cand) {
+        if (n === idx) continue;
+        const q = segs[n];
+        const r = segIntersect(px, py, px + vx * extend, py + vy * extend, q[0], q[1], q[2], q[3]);
+        if (r && r[0] > 0 && r[0] <= 1 && r[1] >= -1e-6 && r[1] <= 1 + 1e-6 && (!best || r[0] < best)) best = r[0];
+      }
+      if (best != null) { added.push([px, py, px + vx * extend * best, py + vy * extend * best]); continue; }
+      // 2) kapak: paralel çizgi, dik mesafe kalınlık aralığında, ucun izdüşümü çizginin üstünde.
+      // Her iki yandaki en yakın çizgiye ayrı kapak: çok katmanlı duvarlarda (sıva + yalıtım +
+      // gövde ayrı çizgiler) bütün şeritler kapanır.
+      const caps = { 1: null, '-1': null };
+      for (const n of cand) {
+        if (n === idx) continue;
+        const q = segs[n];
+        const qL = Math.hypot(q[2] - q[0], q[3] - q[1]);
+        if (qL < tol) continue;
+        const ux = (q[2] - q[0]) / qL, uy = (q[3] - q[1]) / qL;
+        if (Math.abs(ux * vy - uy * vx) > 0.03) continue; // paralel değil
+        const t = (px - q[0]) * ux + (py - q[1]) * uy;
+        if (t < -tol || t > qL + tol) continue;
+        const fx = q[0] + ux * Math.max(0, Math.min(qL, t)), fy = q[1] + uy * Math.max(0, Math.min(qL, t));
+        const dist = Math.hypot(fx - px, fy - py);
+        if (dist < capMin || dist > capMax) continue;
+        const side = Math.sign((fx - px) * vy - (fy - py) * vx) || 1;
+        if (!caps[side] || dist < caps[side].dist) caps[side] = { dist, fx, fy };
+      }
+      for (const c of [caps[1], caps['-1']]) if (c) added.push([px, py, c.fx, c.fy]);
+    }
+  }
+  return added.length ? segs.concat(added) : segs;
+}
+
 // ---------------------------------------------------------------- ana algılama
 
 export function detect(drawing, opts) {
@@ -272,7 +353,7 @@ export function detect(drawing, opts) {
   const minRoom = P.minRoomM2 * 1e4 * k * k;
 
   // Duvarlar
-  const wallSegs = collectSegments(drawing, opts.wallLayers, opts.region);
+  const wallSegs = closeOpenEnds(collectSegments(drawing, opts.wallLayers, opts.region), tol, minT * 0.5, maxT, 3 * k + tol);
   const wf = buildFaces(wallSegs, tol, [minT * 0.5, maxT]);
   const walls = [];
   for (const f of wf.faces) {
@@ -424,38 +505,13 @@ export function detect(drawing, opts) {
     o.kind = o.exterior ? 'window' : widthCm > P.maxDoorCm ? 'empty' : 'door';
   }
 
-  // Kapı / pencere işaret katmanları (açılış yayı, doğrama çizgisi vb.) türü belirler
-  const markers = (set) => {
-    const pts = [];
-    if (!set || !set.size) return pts;
-    const r = opts.region;
-    for (const pr of drawing.prims) {
-      if (!set.has(pr.l)) continue;
-      for (let i = 0; i < pr.pts.length; i += 2) {
-        const x = pr.pts[i], y = pr.pts[i + 1];
-        if (r && (x < r[0] || x > r[2] || y < r[1] || y > r[3])) continue;
-        pts.push(x, y);
-      }
-    }
-    return pts;
-  };
-  const doorPts = markers(opts.doorLayers), winPts = markers(opts.windowLayers);
-  const near = (o, pts, reach) => {
-    const [cx, cy] = o.center;
-    for (let i = 0; i < pts.length; i += 2) {
-      const dx = pts[i] - cx, dy = pts[i + 1] - cy;
-      const sa = Math.abs(dx * o.along[0] + dy * o.along[1]);
-      const sc = Math.abs(dx * o.across[0] + dy * o.across[1]);
-      if (sa <= o.width / 2 + tol * 2 && sc <= o.thickness / 2 + reach) return true;
-    }
-    return false;
-  };
-  if (doorPts.length || winPts.length) {
-    for (const o of openings) {
-      if (doorPts.length && near(o, doorPts, Math.max(o.width, 30 * k))) { o.kind = 'door'; o.marker = 'door'; }
-      else if (winPts.length && near(o, winPts, 20 * k)) { o.kind = 'window'; o.marker = 'window'; }
-    }
-  }
+  // Boşluk türü kanıta göre belirlenir (dış cephe = pencere varsayımı yok):
+  //  - içi taşıyıcı tarama / beton çizgileriyle dolu   -> dolu (duvar/kolon)
+  //  - kapı işareti (açılış yayı) yakınında              -> kapı
+  //  - cam/doğrama çizgisi boşluğu kesiyor ya da boşluk
+  //    boyunca uzanan paralel çizgiler (cam, denizlik)  -> pencere
+  //  - kanıt yok: dış cephede dar (<80 cm) -> dolu, geniş -> geçiş; içeride -> kapı / geçiş
+  classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm: P.maxDoorCm });
 
   // Mahaller: kapı ve pencere boşlukları kapatılarak
   const rf = buildFaces(wallSegs.concat(colSegs, closures(openings.filter((o) => o.kind !== 'empty'))), tol, [minT * 0.5, maxT]);
@@ -487,6 +543,115 @@ export function detect(drawing, opts) {
 
 const NON_ROOM_TEXT = /^m[-_ ]|hvac|vrf|klima|yang[ıi]n|fire|spr|sprink|elektr|electr|tesisat|sıhhi|sihhi|plumb|daikin|vana|valve|boru|pipe|ölçü|olcu|dim|kot|detail|detay|ata |walky|tefri|mobilya|furn/i;
 const ROOM_TEXT = /mahal|room|space|oda|yaz[ıi]|text|txt|anno/i;
+
+
+// ---------------------------------------------------------------- boşluk sınıflandırma
+const STRUCT_RE = /strukt|struct|beton|concrete|kolon|column|perde|\btrm\b|-trm|tarama|hatch|solid|betonarme/i;
+const NON_ARCH_RE = /^m[-_ ]|hvac|vrf|klima|sprink|\bspr\b|yang[ıi]n|fire|elektr|electr|priz|tefri|mobilya|furn|olcu|ölçü|\bdim|aks|axis|yaz[ıi]|text|txt|\bkot\b|tavan|ceiling|asma|rezerv|agac|ağaç|insan|people|peyzaj/i;
+
+export function classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm }) {
+  if (!openings.length) return;
+  const region = opts.region;
+  const wallSet = opts.wallLayers || new Set();
+  const colSet = opts.columnLayers || new Set();
+  const doorSet = opts.doorLayers || new Set();
+  const winSet = opts.windowLayers || new Set();
+  // bölgedeki aday segmentler (ızgara ile)
+  let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+  for (const o of openings) for (const p of o.rect) { bx0 = Math.min(bx0, p[0]); by0 = Math.min(by0, p[1]); bx1 = Math.max(bx1, p[0]); by1 = Math.max(by1, p[1]); }
+  const pad = 400 * k;
+  bx0 -= pad; by0 -= pad; bx1 += pad; by1 += pad;
+  const cell = 200 * k;
+  const grid = new Map();
+  const key = (i, j) => i * 92821 + j;
+  const cls = new Map();
+  const layerClass = (l) => {
+    let c = cls.get(l);
+    if (c) return c;
+    const n = drawing.layers[l].name;
+    c = doorSet.has(l) ? 'door' : winSet.has(l) ? 'win' : wallSet.has(l) ? 'wall' : colSet.has(l) ? 'struct' : STRUCT_RE.test(n) ? 'struct' : NON_ARCH_RE.test(n) ? 'skip' : 'arch';
+    cls.set(l, c);
+    return c;
+  };
+  const segs = [];
+  for (const pr of drawing.prims) {
+    const c = layerClass(pr.l);
+    if (c === 'skip' || c === 'wall') continue;
+    const p = pr.pts, n = p.length / 2;
+    const m = pr.closed ? n : n - 1;
+    for (let i = 0; i < m; i++) {
+      const j = (i + 1) % n;
+      const x1 = p[2 * i], y1 = p[2 * i + 1], x2 = p[2 * j], y2 = p[2 * j + 1];
+      if (Math.max(x1, x2) < bx0 || Math.min(x1, x2) > bx1 || Math.max(y1, y2) < by0 || Math.min(y1, y2) > by1) continue;
+      if (region && (Math.max(x1, x2) < region[0] || Math.min(x1, x2) > region[2] || Math.max(y1, y2) < region[1] || Math.min(y1, y2) > region[3])) continue;
+      const idx = segs.length;
+      segs.push([x1, y1, x2, y2, c]);
+      const i0 = Math.floor((Math.min(x1, x2) - bx0) / cell), i1 = Math.floor((Math.max(x1, x2) - bx0) / cell);
+      const j0 = Math.floor((Math.min(y1, y2) - by0) / cell), j1 = Math.floor((Math.max(y1, y2) - by0) / cell);
+      if ((i1 - i0 + 1) * (j1 - j0 + 1) > 400) continue;
+      for (let a = i0; a <= i1; a++) for (let b = j0; b <= j1; b++) { const kk = key(a, b); let l = grid.get(kk); if (!l) grid.set(kk, (l = [])); l.push(idx); }
+    }
+  }
+  const around = (o, reach) => {
+    const xs = o.rect.map((p) => p[0]), ys = o.rect.map((p) => p[1]);
+    const i0 = Math.floor((Math.min(...xs) - reach - bx0) / cell), i1 = Math.floor((Math.max(...xs) + reach - bx0) / cell);
+    const j0 = Math.floor((Math.min(...ys) - reach - by0) / cell), j1 = Math.floor((Math.max(...ys) + reach - by0) / cell);
+    const out = new Set();
+    for (let a = i0; a <= i1; a++) for (let b = j0; b <= j1; b++) for (const n of grid.get(key(a, b)) || []) out.add(n);
+    return out;
+  };
+  for (const o of openings) {
+    const [cx, cy] = o.center, al = o.along, ac = o.across;
+    const hw = o.width / 2, ht = o.thickness / 2;
+    // yerel koordinat: a = duvar ekseni boyunca, c = duvara dik
+    const loc = (x, y) => [(x - cx) * al[0] + (y - cy) * al[1], (x - cx) * ac[0] + (y - cy) * ac[1]];
+    // segmentin [a0,a1]x[c0,c1] kutusu içinde kalan parçasının boyu (Liang-Barsky)
+    const clipLen = (s, a0, a1, c0, c1) => {
+      const [pa, pc] = loc(s[0], s[1]), [qa, qc] = loc(s[2], s[3]);
+      let t0 = 0, t1 = 1;
+      const da = qa - pa, dc = qc - pc;
+      for (const [p, q] of [[-da, pa - a0], [da, a1 - pa], [-dc, pc - c0], [dc, c1 - pc]]) {
+        if (Math.abs(p) < 1e-12) { if (q < 0) return 0; continue; }
+        const r = q / p;
+        if (p < 0) { if (r > t1) return 0; if (r > t0) t0 = r; } else { if (r < t0) return 0; if (r < t1) t1 = r; }
+      }
+      return Math.hypot(da, dc) * Math.max(0, t1 - t0);
+    };
+    let structLen = 0, winHit = false, doorHit = false, glazing = 0, glazingLong = 0;
+    for (const n of around(o, Math.max(o.width, 60 * k))) {
+      const s = segs[n], c = s[4];
+      if (c === 'door') { if (clipLen(s, -hw - 5 * k, hw + 5 * k, -ht - Math.max(o.width, 30 * k), ht + Math.max(o.width, 30 * k)) > 0) doorHit = true; continue; }
+      const inside = clipLen(s, -hw * 0.9, hw * 0.9, -ht * 0.9, ht * 0.9);
+      if (c === 'struct') { structLen += inside; continue; }
+      if (c === 'win') { if (clipLen(s, -hw, hw, -ht - 20 * k, ht + 20 * k) > 0) winHit = true; continue; }
+      // genel mimari çizgi: boşluk boyunca uzanan paralel çizgi (cam / denizlik)
+      const [pa, pc] = loc(s[0], s[1]), [qa, qc] = loc(s[2], s[3]);
+      const L = Math.hypot(qa - pa, qc - pc);
+      if (L < 1e-9 || Math.abs(qc - pc) / L > 0.05) continue;
+      if (Math.abs((pc + qc) / 2) > ht + 2 * k) continue;
+      const lo = Math.max(-hw, Math.min(pa, qa)), hi = Math.min(hw, Math.max(pa, qa));
+      if (hi - lo < 0.6 * o.width) continue;
+      // boşlukla sınırlı (pervazlarda biten) çizgi güçlü cam kanıtıdır; cephe boyunca
+      // kesintisiz giden kaplama/görünüş çizgisi değildir
+      if (L <= o.width + 2 * o.thickness + 40 * k) glazing++; else glazingLong++;
+    }
+    const widthCm = o.width / k;
+    const area = o.width * o.thickness;
+    let kind, why;
+    if (structLen > Math.max(o.thickness * 3, Math.sqrt(area) * 2)) { kind = 'solid'; why = 'İçi taşıyıcı tarama / beton çizgileriyle dolu'; }
+    else if (doorHit) { kind = 'door'; why = 'Kapı işareti (açılış yayı) var'; }
+    else if (winHit) { kind = 'window'; why = 'Cam / doğrama çizgisi boşluğu kesiyor'; }
+    else if (o.exterior && glazing >= 1) { kind = 'window'; why = `Boşlukla sınırlı ${glazing} paralel çizgi (cam/denizlik) var`; }
+    else if (o.exterior && glazingLong >= 2 && widthCm >= 80) { kind = 'window'; why = `Boşluktan geçen ${glazingLong} paralel çizgi var (cam olabilir)`; }
+    else if (o.exterior) { kind = widthCm < 80 ? 'solid' : 'empty'; why = widthCm < 80 ? 'Dış cephede dar boşluk, cam izi yok' : 'Dış cephede cam izi yok (açıklık sayıldı)'; }
+    else if (!o.weak && widthCm <= maxDoorCm) { kind = 'door'; why = 'İç duvarda kapı genişliğinde boşluk'; }
+    else if (o.weak && widthCm <= 150) { kind = 'door'; why = 'İç boşluk (duvar yan yüzüne bakıyor)'; }
+    else { kind = 'empty'; why = 'Geniş iç açıklık'; }
+    o.kind = kind;
+    o.why = why;
+    o.marker = doorHit ? 'door' : winHit ? 'window' : undefined;
+  }
+}
 
 function distToPoly(x, y, poly) {
   let best = Infinity;

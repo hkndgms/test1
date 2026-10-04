@@ -3,7 +3,7 @@ import { aciToHex } from './aci.js';
 import { pointInPoly } from './detect.js';
 import { SYSTEMS } from './kb.js';
 
-const KIND_COLOR = { window: 'win', door: 'door', empty: 'empty' };
+const KIND_COLOR = { window: 'win', door: 'door', empty: 'empty', solid: 'wall' };
 
 export class Plan2D {
   constructor(canvas, { onSelect, onRegion, colors }) {
@@ -204,6 +204,14 @@ export class Plan2D {
     ctx.globalAlpha = 1;
     if (this.model && this.archVisible !== false) this._drawModel(ctx, C, scale, world);
     if (this.mep && this.mepVisible) this._drawMep(ctx, scale, world);
+    if (this.partRegions && this.partRegions.length) {
+      world();
+      ctx.setLineDash([14 / scale, 8 / scale]);
+      ctx.lineWidth = 1.2 / scale;
+      ctx.strokeStyle = C.muted;
+      for (const r of this.partRegions) if (r) ctx.strokeRect(r[0], r[1], r[2] - r[0], r[3] - r[1]);
+      ctx.setLineDash([]);
+    }
     if (this.region) {
       world();
       const [a, b, c, d] = this.region;

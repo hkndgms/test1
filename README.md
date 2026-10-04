@@ -10,7 +10,13 @@ Sunucu veya bulut gerekmez; dosyalar kullanıcının bilgisayarından çıkmaz.
 3. **Algılar:**
    - **Duvarlar:** duvar katmanındaki ince kapalı alanlar; açık uçlar otomatik kapatılır.
    - **Kolonlar:** kolon katmanındaki kapalı alanlar.
-   - **Kapı ve pencere boşlukları:** karşılıklı duvar uçları arasındaki boşluklar.
+   - **Kapı ve pencere boşlukları:** karşılıklı duvar uçları arasındaki boşluklar. Türü kanıta göre belirlenir:
+     - **dolu:** içi taşıyıcı tarama veya beton ise;
+     - **kapı:** açılış yayı varsa;
+     - **pencere:** cam/doğrama çizgisi boşluğu kesiyorsa ya da boşlukla sınırlı paralel cam/denizlik çizgileri varsa;
+     - **kanıt yoksa:** dar dış boşluk dolu, geniş dış boşluk geçiş sayılır.
+     Her kararın gerekçesi seçim kartında gösterilir.
+   - **Açık uç onarımı:** Açık kalan duvar uçları kapatılır. Bu, kayık biten çizgilerde ve sıva + yalıtım + gövdesi ayrı çizilmiş çok katmanlı duvarlarda da çalışır. Birkaç cm kala biten çizgiler karşı duvara uzatılır.
    - **Mahaller:** odalar, adları ve alanlarıyla.
    - **Bina dış hattı.**
 4. **Düzenleme:** Plana tıklanan boşluğun türü değiştirilebilir (pencere / kapı / geçiş). Yükseklik ve parapet ayarlanabilir, öğe silinebilir, mahal adı değiştirilebilir.
@@ -24,12 +30,13 @@ Sunucu veya bulut gerekmez; dosyalar kullanıcının bilgisayarından çıkmaz.
    - **Uç birimler:** sprinkler başlıkları ve vanalar.
    - **IFC sınıfları:** `IfcPipeSegment`, `IfcDuctSegment`, `IfcAirTerminal`, `IfcUnitaryEquipment`, `IfcFireSuppressionTerminal`, `IfcValve` ve sistem başına `IfcDistributionSystem`.
    - **Kot:** Asma tavan kotu projede yazıyorsa okunur; yoksa kullanıcıya sorulur ve çizimdeki kot yazıları öneri olarak gösterilir.
-9. **Çöp çizim ayıklama:** Pafta ayrık çizim gruplarına bölünür. Asıl plan, duvar algılama ve tesisat içeriğine göre seçilir. Lejant, kolon şeması, detay ve uzak kalıntılar yok sayılır. Ayrıca şunlar atlanır: sprinkler etki daireleri, yazı/ölçü/tarama katmanları ve başka projelerden bağlanmış referans katmanları (`...$0$...`, `SUPERPOZE`).
-10. **Öğrenen bilgi bankası:** Bilinmeyen katmanlar işaretlenir ve yapay zekâ komutuna içerik özetleriyle eklenir.
+9. **Pafta bölümleri:** Pafta ayrık çizimlere bölünür ve her bölüm adıyla (içindeki başlık yazısından), boyutuyla ve içeriğiyle listelenir. Bir veya birden çok bölüm seçilip birlikte işlenebilir. Her bölüm kendi katmanları ve birimiyle algılanır, sonuçlar tek modelde birleşir.
+10. **Çöp çizim ayıklama:** Pafta ayrık çizim gruplarına bölünür. Asıl plan, duvar algılama ve tesisat içeriğine göre seçilir. Lejant, kolon şeması, detay ve uzak kalıntılar yok sayılır. Ayrıca şunlar atlanır: sprinkler etki daireleri, yazı/ölçü/tarama katmanları ve başka projelerden bağlanmış referans katmanları (`...$0$...`, `SUPERPOZE`).
+11. **Öğrenen bilgi bankası:** Bilinmeyen katmanlar işaretlenir ve yapay zekâ komutuna içerik özetleriyle eklenir.
     - Yapay zekâdan hem bu projenin kararları hem de gelecek projeler için genel kurallar (`learn`, `ignore`) istenir.
     - Gelen kurallar tarayıcıda saklanır, JSON olarak dışa/içe aktarılabilir.
     - Kullanıcı bir katmanın ayarını "Öğret" düğmesiyle de kural yapabilir.
-11. **RVT inceleme:** Revit olmadan okunabilenleri gösterir: sürüm, önizleme resmi, bağlantılar, tip adları. 3B geometri kapalı formatta olduğu için okunamaz.
+12. **RVT inceleme:** Revit olmadan okunabilenleri gösterir: sürüm, önizleme resmi, bağlantılar, tip adları. 3B geometri kapalı formatta olduğu için okunamaz.
 
 ## Klasörler
 
@@ -73,6 +80,9 @@ IFC=/tmp/test.ifc node tests/run-sample.mjs
 python3 tests/validate_ifc.py /tmp/test.ifc
 # Otomatik kurulum + tesisat çıkarımı (+ IFC_DIR verilirse IFC)
 IFC_DIR=/tmp node tests/run-mep.mjs dosya1.dwg dosya2.dwg
+# Duvar kapsama ve boşluk kanıtı analizi
+node tests/coverage.mjs dosya.dwg cikti.svg
+node tests/openings-evidence.mjs dosya.dwg
 # Uçtan uca tarayıcı testi (playwright gerekir; EXTRA=dosya.dwg ile ek dosya yükler)
 node tests/e2e.cjs http://localhost:8000/ /tmp
 ```
@@ -82,7 +92,7 @@ node tests/e2e.cjs http://localhost:8000/ /tmp
 - Tesisat: 2B planda kot yoktur. Her katman tek bir kota (tavandan/döşemeden fark) yerleştirilir. Düşey kolonlar, eğimler ve bağlantı parçaları (dirsek, te) henüz yok. Tek çizgili havalandırma kanalları (kapalı şekil olmayan) çizilmez.
 - Tek kat. Düz duvarlar; kavisli duvarlar parçalı yaklaşıklanır. Çatı, merdiven ve döşeme boşlukları yok.
 - Duvarlar IFC'de çizimdeki dış hatlarıyla parça parça aktarılır (her parça ayrı `IfcWall`). Pencere üstü ve altı lento/parapet olarak ayrı duvar parçalarıdır.
-- Dış cephedeki boşluklar varsayılan olarak pencere sayılır; giriş kapılarını planda tıklayarak ya da yapay zekâ asistanıyla değiştirin.
+- Cam izi olmayan geniş dış boşluklar "geçiş" sayılır. Giriş kapısı veya pencere olanları planda tıklayarak ya da yapay zekâ asistanıyla değiştirin.
 - Algılama kalitesi çizimin düzenine bağlıdır: duvarlar ayrı katmanda ve kapalı/paralel çizgilerle çizilmiş olmalıdır.
 
 ## Lisans

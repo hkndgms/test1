@@ -2,12 +2,12 @@
 // pencere katmanları ve çizim birimi. Lejant, kolon şeması, detay ve uzak
 // kalıntılar ayrı adalarda kaldığı için yok sayılır.
 import { detect, collectSegments, UNIT_NAMES, UNIT_TO_CM } from './detect.js';
-import { findIslands, padBox } from './islands.js';
+import { findIslands, labelIslands, padBox } from './islands.js';
 
 export const WALL_RE = /duvar|wall|perde/i;
 export const COL_RE = /beton|kolon|column|colm|struct|strukt|tasiyici|taşıyıcı/i;
 export const DOOR_RE = /kap[ıi]|door|\bdr\b/i;
-export const WIN_RE = /pencere|window|wndw|glaz/i;
+export const WIN_RE = /pencere|window|wndw|glaz|do[gğ]rama|\bcam\b|-cam\b|glass|curtain|giydirme/i;
 const SKIP_MARK_RE = /^m[-_]|hvac|vrf|yazi|yazı|text|tag|etiket/i;
 export const SKIP_RE = /^m[-_]|hvac|vrf|tesisat|walky|tefri|tarama|hatch|olcu|ölçü|dim|yazi|yazı|text|[-_ ]trm[-_ ]|^trm|superpoze/i;
 
@@ -31,9 +31,9 @@ function layerBBox(d, set, within) {
   return isFinite(a) ? padBox([a, b, c, e], 0.05) : null;
 }
 
-export function autoSetup(d, { params, units: declared, kb }) {
-  const islands = findIslands(d, { unitToCm: UNIT_TO_CM[declared] ?? 1 });
-  let top = islands.slice(0, 8);
+export function autoSetup(d, { params, units: declared, kb, islands: given, onlyIslands }) {
+  const islands = given || labelIslands(d, findIslands(d, { unitToCm: UNIT_TO_CM[declared] ?? 1 }));
+  let top = onlyIslands ? onlyIslands : islands.slice(0, 8);
   // Çizimde tesisat varsa yalnız anlamlı miktarda tesisat içeren adaları değerlendir
   // (ağaçlı vaziyet planı gibi mimari kopyalar elenir; şema/lejant adaları duvar
   // içermediği için zaten skor alamaz)
@@ -47,7 +47,7 @@ export function autoSetup(d, { params, units: declared, kb }) {
       for (const isl of top) if (x >= isl.bbox[0] && x <= isl.bbox[2] && y >= isl.bbox[1] && y <= isl.bbox[3]) { isl.mep++; break; }
     }
     const maxMep = Math.max(0, ...top.map((i) => i.mep));
-    if (maxMep >= 200) top = top.filter((i) => i.mep >= 0.2 * maxMep);
+    if (maxMep >= 200 && !onlyIslands) top = top.filter((i) => i.mep >= 0.2 * maxMep);
   }
   const unitsTry = [declared, ...[4, 5, 6].filter((u) => u !== declared)];
   const wallCands = d.layers.map((l, i) => ({ l, i })).filter(({ l }) => l.count > 0 && WALL_RE.test(l.name) && !SKIP_RE.test(l.name));
@@ -103,9 +103,11 @@ export function autoSetup(d, { params, units: declared, kb }) {
     return out;
   }
   out.planIsland = best.island;
-  // Bina sınırı (duvar katmanının kapsadığı alan) + çevresinde küçük pay: dış üniteler,
-  // rögarlar ve şebeke bağlantıları dahil, aynı adadaki detay çizimleri hariç
-  out.region = padBox(best.region, 0.12);
+  // İşlenen alan: asıl planın bulunduğu bölümün tamamı (tesisat duvarların dışına taşabilir).
+  // Bölüm duvar sınırına göre aşırı büyükse (paftada birbirine değen çizimler) duvar sınırı + pay.
+  const ib = best.island.bbox, wb = best.region;
+  const ratio = ((ib[2] - ib[0]) * (ib[3] - ib[1])) / Math.max(1e-9, (wb[2] - wb[0]) * (wb[3] - wb[1]));
+  out.region = ratio > 12 ? padBox(wb, 0.15) : padBox(ib, 0.02);
   if (best.u !== declared) {
     out.unitNote = `Dosyada birim "${UNIT_NAMES[declared] || '?'}" yazıyor ama ölçüler ${UNIT_NAMES[best.u]} ile tutarlı; ${UNIT_NAMES[best.u]} kullanıldı. Gerekirse Ölçüler › Çizim birimi'nden değiştirin.`;
     out.units = best.u;

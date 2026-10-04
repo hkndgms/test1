@@ -18,7 +18,7 @@ export function buildPrompt({ drawing, roles, params, buildParams, model, fileNa
   const blocks = [...new Set(drawing.inserts.map((b) => b.name))].slice(0, 60);
   const th = {};
   for (const w of model?.walls || []) { const k = Math.round(w.thickness * model.unitScale); th[k] = (th[k] || 0) + 1; }
-  const openingRows = (model?.openings || []).map((o) => `${o.id}\t${Math.round(o.width * model.unitScale)}\t${o.exterior ? 'dış' : 'iç'}\t${o.kind}${o.weak ? '\tzayıf' : ''}`);
+  const openingRows = (model?.openings || []).map((o) => `${o.id}\t${Math.round(o.width * model.unitScale)}\t${o.exterior ? 'dış' : 'iç'}\t${o.kind}${o.why ? '\t(' + o.why + ')' : ''}`);
   const roomRows = (model?.rooms || []).map((r) => `${r.id}\t${(Math.abs(r.area) * model.unitScale ** 2 / 1e4).toFixed(1)} m²\t${r.name || '(adsız)'}`);
 
   // Tesisat katmanları: bilinmeyenler önce, sonra kullanılanlar, sonra yok sayılan tesisat benzerleri
@@ -51,7 +51,7 @@ KURALLAR
 - "columns": betonarme kolon/perde katmanları. "texts": mahal (oda) adlarının yazıldığı katmanlar; emin değilsen boş bırak.
 - "doors": kapı açılış yaylarının / kapı bloklarının çizildiği katmanlar; "windows": pencere doğramalarının katmanları. Boşluk bu katmanlardan bir çizime yakınsa türü otomatik kapı/pencere olur.
 - Yükseklikler santimetre. Türkiye'de tipik: kat yüksekliği 300-350, kapı 210-220, pencere parapeti 90-110, pencere yüksekliği 120-180.
-- "openings": yalnızca değiştirmek istediğin boşlukları yaz. kind: "door" (kapı), "window" (pencere), "empty" (kapısız geçiş/koridor), "delete" (boşluk değil). Dış cephedeki giriş kapılarını "door" yap (mahal adlarından ve genişlikten tahmin et, örn. 150+ cm dış boşluk ana giriş olabilir).
+- "openings": yalnızca değiştirmek istediğin boşlukları yaz. kind: "door" (kapı), "window" (pencere), "empty" (kapısız geçiş/koridor), "solid" (aslında dolu duvar/kolon; cam değil), "delete" (boşluk değil). Her boşluğun yanında programın gerekçesi yazıyor; cam izi olmayan yerleri pencere yapma. Dış cephedeki giriş kapılarını "door" yap (mahal adlarından ve genişlikten tahmin et, örn. 150+ cm dış boşluk ana giriş olabilir).
 - "rooms": adsız veya yanlış adlı mahaller için isim önerebilirsin.
 - Bilmediğin alanı hiç yazma.
 

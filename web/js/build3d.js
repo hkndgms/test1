@@ -62,6 +62,11 @@ export function buildSolids(model, params, overrides = {}) {
     const top = (host.heightCm ?? P.wallHeightCm) / 100;
     const widthCm = Math.round(op.width * model.unitScale);
     if (kind === 'empty') continue;
+    if (kind === 'solid') {
+      // dolu: boşluk duvarla kapatılır (taşıyıcı tarama, cam izi olmayan dar parça vb.)
+      out.push({ type: 'wall', id: op.id + '-F', src: op.id, name: `Dolgu duvar ${op.id}`, profile: ccw(op.rect.map(tr)), z0: 0, z1: top, props: { exterior: !!op.exterior, thicknessCm: Math.round(op.thickness * model.unitScale), lengthM: +(op.width * s).toFixed(2) } });
+      continue;
+    }
     // kapı/pencere gövdesi: duvar ortasında ince bir levha
     const [cx, cy] = tr(op.center);
     const al = op.along, ac = op.across;
@@ -85,12 +90,12 @@ export function buildSolids(model, params, overrides = {}) {
       if (top - head > 0.01) out.push({ type: 'lintel', id: op.id + '-L', src: op.id, name: `Lento ${op.id}`, profile: rect, z0: head, z1: top, props: {} });
     }
   }
-  if (model.outline && P.makeFloor) {
-    out.push({ type: 'slab', id: 'SLAB', src: 'SLAB', name: 'Zemin döşemesi', profile: ccw(model.outline.map(tr)), z0: -P.slabThicknessCm / 100, z1: 0, props: {} });
-  }
-  if (model.outline && P.makeRoof) {
-    out.push({ type: 'roof', id: 'ROOF', src: 'ROOF', name: 'Tavan döşemesi', profile: ccw(model.outline.map(tr)), z0: H, z1: H + P.roofThicknessCm / 100, props: {} });
-  }
+  const outlines = model.outlines || (model.outline ? [model.outline] : []);
+  outlines.forEach((ol, i) => {
+    const sfx = outlines.length > 1 ? '.' + (i + 1) : '';
+    if (P.makeFloor) out.push({ type: 'slab', id: 'SLAB' + sfx, src: 'SLAB' + sfx, name: 'Zemin döşemesi', profile: ccw(ol.map(tr)), z0: -P.slabThicknessCm / 100, z1: 0, props: {} });
+    if (P.makeRoof) out.push({ type: 'roof', id: 'ROOF' + sfx, src: 'ROOF' + sfx, name: 'Tavan döşemesi', profile: ccw(ol.map(tr)), z0: H, z1: H + P.roofThicknessCm / 100, props: {} });
+  });
   if (P.makeSpaces) {
     for (const r of model.rooms) {
       const o = ov(r.id);

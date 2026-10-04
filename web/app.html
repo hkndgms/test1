@@ -208,6 +208,13 @@ ol.steps li { display: grid; gap: 6px; justify-items: start; }
 ol.steps li::marker { font: 600 13px var(--font-mono); color: var(--accent); }
 ol.steps textarea { width: 100%; }
 .vtools { display: flex; gap: 4px; margin-left: 8px; }
+.parts { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 300px; overflow: auto; }
+.parts li { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--r); background: var(--field); }
+.parts li.on { border-color: var(--accent); background: var(--accent-soft); }
+.parts label { display: flex; gap: 8px; align-items: flex-start; flex: 1; min-width: 0; cursor: pointer; }
+.parts .pl { display: grid; min-width: 0; }
+.parts .pl b { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.parts .pl .hint { font-size: 11px; }
 .report { border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--r); padding: 10px; display: grid; gap: 6px; font-size: 13px; }
 .report p { margin: 0; }
 .report ul, ul.diag { margin: 0; padding-left: 16px; display: grid; gap: 4px; font-size: 12px; }
@@ -267,6 +274,13 @@ li.sev-medium i { color: var(--warn) !important; }
         <section class="card-s" id="todoBox">
           <h3>Yapılacaklar</h3>
           <ul class="todo" id="todo"><li class="t-info"><span>Bir çizim açın.</span></li></ul>
+        </section>
+
+        <section class="card-s" id="partsBox" hidden>
+          <h3>Pafta bölümleri</h3>
+          <p class="hint">Paftadaki ayrı çizimler. Modele çevrilecek bölümleri seçin; birden çok bölüm birlikte işlenebilir.</p>
+          <ul class="parts" id="partsList"></ul>
+          <div class="row"><button class="btn small primary" id="btnParts">Seçilenleri işle</button><span class="hint" id="partsNote"></span></div>
         </section>
 
         <section class="card-s">
