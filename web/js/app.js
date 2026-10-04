@@ -9,8 +9,8 @@ import { buildPrompt, parseAnswer } from './ai-prompt.js';
 import { readRvt } from './rvt.js';
 
 const $ = (id) => document.getElementById(id);
-const SAMPLE_DWG = 'samples/taziye-evi.dwg';
-const SAMPLE_RVT = 'samples/taziye-evi.rvt';
+const SAMPLE_DWG = 'samples/taziye-evi.dwg.b64.txt';
+const SAMPLE_RVT = 'samples/taziye-evi.rvt.b64.txt';
 
 const state = {
   drawing: null,
@@ -29,6 +29,15 @@ const state = {
 };
 
 // ------------------------------------------------------------ yardımcılar
+// Örnekler base64 metin olarak paketlenir (bkz. tools/pack-samples.mjs)
+async function fetchSample(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const bin = atob((await r.text()).trim());
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out.buffer;
+}
 function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function themeColors() {
   return {
@@ -122,10 +131,8 @@ function loadBuffer(buf, name) {
 
 async function loadSample() {
   try {
-    overlay('Örnek proje indiriliyor (4,4 MB)…');
-    const r = await fetch(SAMPLE_DWG);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    loadBuffer(await r.arrayBuffer(), 'ÖRNEK · 03.10.2026_TAZIYE_EVI_MEKANIK_PROJE.dwg');
+    overlay('Örnek proje indiriliyor (6 MB)…');
+    loadBuffer(await fetchSample(SAMPLE_DWG), 'ÖRNEK · 03.10.2026_TAZIYE_EVI_MEKANIK_PROJE.dwg');
   } catch (e) {
     overlay('Örnek dosya indirilemedi (' + e.message + '). Kendi DWG dosyanızı açabilirsiniz.', 'Örnek açılamadı');
   }
@@ -595,11 +602,9 @@ async function inspectRvt(file) {
 }
 $('rvtInput').onchange = () => { const f = $('rvtInput').files[0]; if (f) inspectRvt(f); $('rvtInput').value = ''; };
 $('btnRvtSample').onclick = async () => {
-  rvtStatus('Örnek RVT indiriliyor (8 MB)…');
+  rvtStatus('Örnek RVT indiriliyor (11 MB)…');
   try {
-    const r = await fetch(SAMPLE_RVT);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    inspectRvt(new File([await r.blob()], 'taziye_evi_30092026.dwg.rvt'));
+    inspectRvt(new File([await fetchSample(SAMPLE_RVT)], 'taziye_evi_30092026.dwg.rvt'));
   } catch (e) { rvtStatus('Örnek RVT indirilemedi: ' + e.message, 'err'); }
 };
 
