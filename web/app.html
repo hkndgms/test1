@@ -1,0 +1,309 @@
+<title>DWG2BIM Atölyesi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Düzen: üst şerit + solda adım adım ayar paneli, sağda plan/3B tuvali (dar ekranda alt alta) */
+:root {
+  --bg: #e9ece6; --panel: #f7f8f4; --ink: #1b2220; --muted: #5a6560; --line: #d0d6ce;
+  --accent: #1f5fbf; --accent-ink: #ffffff; --accent-soft: rgba(31, 95, 191, .14);
+  --canvas: #fbfcf9; --field: #ffffff; --warn: #a15c00; --bad: #b3261e; --good: #2e7d43;
+  --wall: #cfc7b8; --wall-ext: #b0573b; --wall-edge: #6b4a3c; --column: #43526e;
+  --win: rgba(36, 160, 212, .85); --door: rgba(52, 150, 72, .85); --empty: rgba(150, 150, 140, .45);
+  --room: rgba(240, 196, 64, .16); --room-sel: rgba(240, 196, 64, .38); --outline: #2e7d43;
+  --font-ui: 'Barlow', 'Segoe UI', system-ui, sans-serif;
+  --font-head: 'Barlow Condensed', 'Barlow', 'Arial Narrow', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #121614; --panel: #191e1c; --ink: #e2e7e3; --muted: #95a29b; --line: #2b3330;
+  --accent: #6ea2ff; --accent-ink: #0b1220; --accent-soft: rgba(110, 162, 255, .18);
+  --canvas: #0f1211; --field: #101413; --warn: #f0b45c; --bad: #ff8a80; --good: #7fd18f;
+  --wall: #8c8476; --wall-ext: #c96b4c; --wall-edge: #d8c4b8; --column: #8fa2c6;
+  --win: rgba(70, 190, 240, .8); --door: rgba(96, 200, 116, .8); --empty: rgba(170, 170, 160, .35);
+  --room: rgba(240, 196, 64, .10); --room-sel: rgba(240, 196, 64, .28); --outline: #7fd18f;
+  color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #121614; --panel: #191e1c; --ink: #e2e7e3; --muted: #95a29b; --line: #2b3330;
+  --accent: #6ea2ff; --accent-ink: #0b1220; --accent-soft: rgba(110, 162, 255, .18);
+  --canvas: #0f1211; --field: #101413; --warn: #f0b45c; --bad: #ff8a80; --good: #7fd18f;
+  --wall: #8c8476; --wall-ext: #c96b4c; --wall-edge: #d8c4b8; --column: #8fa2c6;
+  --win: rgba(70, 190, 240, .8); --door: rgba(96, 200, 116, .8); --empty: rgba(170, 170, 160, .35);
+  --room: rgba(240, 196, 64, .10); --room-sel: rgba(240, 196, 64, .28); --outline: #7fd18f;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-ui); margin: 0; font-feature-settings: 'locl' 0; }
+* { box-sizing: border-box; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.brand h1 { font: 700 22px/1 var(--font-head); letter-spacing: .02em; margin: 0; text-transform: uppercase; }
+.brand h1 b { color: var(--accent); }
+.brand span { color: var(--muted); font-size: 13px; }
+.top .spacer { flex: 1; }
+.filechip { font: 12px var(--font-mono); color: var(--muted); max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.work { display: grid; grid-template-columns: minmax(300px, 380px) 1fr; min-height: 0; }
+aside { overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); padding: 4px 16px 24px; }
+main { position: relative; display: grid; grid-template-rows: auto 1fr; min-width: 0; min-height: 0; }
+
+.step { border-bottom: 1px solid var(--line); padding: 14px 0; display: grid; gap: 10px; }
+.step > h2, .step > summary { font: 700 15px/1.2 var(--font-head); letter-spacing: .06em; text-transform: uppercase; margin: 0; display: flex; align-items: center; gap: 8px; cursor: default; }
+.step > summary { cursor: pointer; list-style: none; }
+.step > summary::-webkit-details-marker { display: none; }
+.step > summary::after { content: '+'; margin-left: auto; font: 500 16px var(--font-mono); color: var(--muted); }
+details.step[open] > summary::after { content: '–'; }
+details.step:not([open]) { gap: 0; }
+.no { font: 500 11px/1 var(--font-mono); color: var(--accent); border: 1px solid currentColor; border-radius: 3px; padding: 3px 4px; }
+.hint { color: var(--muted); font-size: 13px; margin: 0; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.btn { border: 1px solid var(--line); background: var(--field); border-radius: var(--r); padding: 7px 12px; cursor: pointer; font-weight: 500; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.small { padding: 4px 9px; font-size: 13px; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.btn.on { background: var(--accent-soft); border-color: var(--accent); }
+
+.drop { border: 1.5px dashed var(--line); border-radius: var(--r); padding: 14px; text-align: center; color: var(--muted); background: var(--field); }
+.drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--ink); }
+.status { font: 12px/1.4 var(--font-mono); color: var(--muted); min-height: 1.4em; }
+.status.err { color: var(--bad); }
+.status.ok { color: var(--good); }
+
+.facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; margin: 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+
+.layers { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--field); }
+.layers table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.layers td { padding: 3px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.layers tr.role-wall td.nm { font-weight: 600; }
+.layers tr.role-wall { background: color-mix(in srgb, var(--wall-ext) 12%, transparent); }
+.layers tr.role-column { background: color-mix(in srgb, var(--column) 14%, transparent); }
+.layers tr.role-text { background: var(--room); }
+.layers td.nm { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.layers td.ct { font: 11px var(--font-mono); color: var(--muted); text-align: right; }
+.layers select { font-size: 12px; padding: 1px 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--field); }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--line); vertical-align: middle; }
+input[type="search"], input[type="text"], input[type="number"], select.full, textarea { width: 100%; border: 1px solid var(--line); border-radius: var(--r); background: var(--field); padding: 6px 8px; }
+textarea { font: 12px/1.45 var(--font-mono); resize: vertical; min-height: 90px; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+.field { display: grid; gap: 3px; min-width: 0; }
+.field label { font-size: 12px; color: var(--muted); }
+.field .unit { position: relative; }
+.field .unit input { padding-right: 34px; font-family: var(--font-mono); font-size: 13px; }
+.field .unit::after { content: attr(data-u); position: absolute; right: 8px; top: 50%; transform: translateY(-50%); font: 11px var(--font-mono); color: var(--muted); pointer-events: none; }
+.check { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+details.adv { border: 1px solid var(--line); border-radius: var(--r); padding: 6px 10px; }
+details.adv summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+details.adv[open] .grid2 { margin-top: 8px; }
+
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.stat { border: 1px solid var(--line); border-radius: var(--r); padding: 6px 8px; background: var(--field); display: grid; gap: 1px; }
+.stat b { font: 600 18px/1.1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.stat span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; display: flex; align-items: center; gap: 5px; }
+.dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+.sel { border: 1px solid var(--accent); border-radius: var(--r); padding: 10px; background: var(--accent-soft); display: grid; gap: 8px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.seg button { border: 0; background: var(--field); padding: 5px 10px; cursor: pointer; font-size: 13px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on { background: var(--accent); color: var(--accent-ink); }
+
+.tabs { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+.tab { border: 0; background: none; padding: 6px 10px; border-radius: var(--r); cursor: pointer; font: 600 14px var(--font-head); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.tab.on { color: var(--ink); background: var(--bg); box-shadow: inset 0 -2px 0 var(--accent); }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-left: auto; }
+.legend span { display: inline-flex; align-items: center; gap: 4px; }
+.stage { position: relative; min-height: 0; }
+.stage > div { position: absolute; inset: 0; }
+.stage canvas { display: block; touch-action: none; }
+#plan { cursor: crosshair; }
+.overlay { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.overlay .card { pointer-events: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; max-width: 46ch; display: grid; gap: 6px; text-align: center; }
+.overlay .card b { font: 700 18px var(--font-head); letter-spacing: .04em; text-transform: uppercase; }
+.floating { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
+.floating .btn { background: var(--panel); }
+
+.rvt img { width: 128px; height: 128px; image-rendering: auto; border: 1px solid var(--line); border-radius: var(--r); background: #fff; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chips span { font: 11px var(--font-mono); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; background: var(--field); }
+.note { font-size: 12px; color: var(--muted); border-left: 3px solid var(--line); padding-left: 8px; margin: 0; }
+.foot { font-size: 11px; color: var(--muted); padding-top: 12px; }
+
+@media (max-width: 860px) {
+  .app { height: auto; }
+  .work { grid-template-columns: 1fr; }
+  main { order: -1; height: 62vh; border-bottom: 1px solid var(--line); }
+  aside { border-right: 0; }
+  .legend { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three/three.module.min.js",
+  "three/addons/": "./vendor/three/addons/"
+} }
+</script>
+
+<div class="app" lang="tr">
+  <header class="top">
+    <div class="brand"><h1>DWG<b>2</b>BIM</h1><span>Kat planından IFC modeli, tamamen tarayıcıda</span></div>
+    <div class="spacer"></div>
+    <span class="filechip" id="fileChip">Dosya yok</span>
+    <button class="btn primary" id="btnExportTop" disabled>IFC indir</button>
+  </header>
+
+  <div class="work">
+    <aside>
+      <section class="step" id="stepFile">
+        <h2><span class="no">01</span>Çizim</h2>
+        <div class="drop" id="drop">DWG veya DXF dosyasını buraya bırakın<br>
+          <div class="row" style="justify-content:center;margin-top:8px">
+            <label class="btn small" for="fileInput">Dosya seç</label>
+            <button class="btn small" id="btnSample">Örnek: Taziye Evi</button>
+          </div>
+          <input type="file" id="fileInput" accept=".dwg,.dxf" hidden>
+        </div>
+        <div class="status" id="status" role="status" aria-live="polite"></div>
+        <dl class="facts" id="facts" hidden></dl>
+      </section>
+
+      <section class="step" id="stepLayers">
+        <h2><span class="no">02</span>Katmanlar</h2>
+        <p class="hint">Duvar ve kolon katmanlarını seçin. Algılama, seçilen katmanlardaki çizgilerden yapılır. Göz işareti yalnızca görünürlüğü değiştirir.</p>
+        <div class="row">
+          <button class="btn small" id="btnAuto">Otomatik seç</button>
+          <button class="btn small" id="btnRegion">Bölge çiz</button>
+          <button class="btn small" id="btnRegionReset">Bölgeyi sıfırla</button>
+        </div>
+        <input type="search" id="layerFilter" placeholder="Katman ara…" aria-label="Katman ara">
+        <div class="layers"><table><tbody id="layerRows"><tr><td class="hint">Önce bir çizim açın.</td></tr></tbody></table></div>
+      </section>
+
+      <section class="step" id="stepParams">
+        <h2><span class="no">03</span>Ölçüler</h2>
+        <div class="grid2">
+          <div class="field"><label for="pUnits">Çizim birimi</label><select class="full" id="pUnits"></select></div>
+          <div class="field"><label for="wallHeightCm">Duvar yüksekliği</label><div class="unit" data-u="cm"><input type="number" id="wallHeightCm" min="100" step="5"></div></div>
+          <div class="field"><label for="doorHeightCm">Kapı yüksekliği</label><div class="unit" data-u="cm"><input type="number" id="doorHeightCm" min="100" step="5"></div></div>
+          <div class="field"><label for="windowSillCm">Pencere parapeti</label><div class="unit" data-u="cm"><input type="number" id="windowSillCm" min="0" step="5"></div></div>
+          <div class="field"><label for="windowHeightCm">Pencere yüksekliği</label><div class="unit" data-u="cm"><input type="number" id="windowHeightCm" min="20" step="5"></div></div>
+          <div class="field"><label for="slabThicknessCm">Döşeme kalınlığı</label><div class="unit" data-u="cm"><input type="number" id="slabThicknessCm" min="0" step="1"></div></div>
+          <div class="field"><label for="projectName">Proje adı</label><input type="text" id="projectName"></div>
+          <div class="field"><label for="storeyName">Kat adı</label><input type="text" id="storeyName"></div>
+        </div>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="makeFloor"> Zemin döşemesi</label>
+          <label class="check"><input type="checkbox" id="makeRoof"> Tavan döşemesi</label>
+          <label class="check"><input type="checkbox" id="makeSpaces"> Mahaller</label>
+        </div>
+        <details class="adv">
+          <summary>Gelişmiş algılama ayarları</summary>
+          <div class="grid2">
+            <div class="field"><label for="minThicknessCm">En ince duvar</label><div class="unit" data-u="cm"><input type="number" id="minThicknessCm" min="1" step="1"></div></div>
+            <div class="field"><label for="maxThicknessCm">En kalın duvar</label><div class="unit" data-u="cm"><input type="number" id="maxThicknessCm" min="5" step="1"></div></div>
+            <div class="field"><label for="minGapCm">En dar boşluk</label><div class="unit" data-u="cm"><input type="number" id="minGapCm" min="10" step="5"></div></div>
+            <div class="field"><label for="maxGapCm">En geniş boşluk</label><div class="unit" data-u="cm"><input type="number" id="maxGapCm" min="50" step="10"></div></div>
+            <div class="field"><label for="maxDoorCm">En geniş iç kapı</label><div class="unit" data-u="cm"><input type="number" id="maxDoorCm" min="50" step="10"></div></div>
+            <div class="field"><label for="tolCm">Birleştirme toleransı</label><div class="unit" data-u="cm"><input type="number" id="tolCm" min="0.1" step="0.1"></div></div>
+          </div>
+        </details>
+        <button class="btn primary" id="btnDetect" disabled>Algıla ve oluştur</button>
+      </section>
+
+      <section class="step" id="stepResult">
+        <h2><span class="no">04</span>Sonuç</h2>
+        <div class="stats" id="stats">
+          <div class="stat"><b id="sWalls">–</b><span><i class="dot" style="background:var(--wall-ext)"></i>Duvar</span></div>
+          <div class="stat"><b id="sCols">–</b><span><i class="dot" style="background:var(--column)"></i>Kolon</span></div>
+          <div class="stat"><b id="sRooms">–</b><span><i class="dot" style="background:var(--room-sel)"></i>Mahal</span></div>
+          <div class="stat"><b id="sWin">–</b><span><i class="dot" style="background:var(--win)"></i>Pencere</span></div>
+          <div class="stat"><b id="sDoor">–</b><span><i class="dot" style="background:var(--door)"></i>Kapı</span></div>
+          <div class="stat"><b id="sEmpty">–</b><span><i class="dot" style="background:var(--empty)"></i>Geçiş</span></div>
+        </div>
+        <p class="hint" id="resultNote">Planda bir öğeye tıklayarak türünü ve ölçülerini değiştirebilirsiniz.</p>
+        <div id="selPanel"></div>
+      </section>
+
+      <details class="step" id="stepAi">
+        <summary><span class="no">05</span>Yapay zekâ asistanı</summary>
+        <p class="hint">1) Komutu oluşturup kopyalayın. 2) Claude, ChatGPT gibi bir yapay zekâya yapıştırın. 3) Gelen cevabın tamamını aşağıya yapıştırıp uygulayın. Katmanlar, ölçüler, kapı/pencere türleri ve mahal adları otomatik ayarlanır.</p>
+        <div class="row">
+          <button class="btn small" id="btnPrompt" disabled>Komut oluştur</button>
+          <button class="btn small" id="btnCopy" disabled>Kopyala</button>
+          <button class="btn small" id="btnAsk" hidden>Claude'a doğrudan sor</button>
+        </div>
+        <textarea id="promptOut" readonly placeholder="Komut burada görünecek" aria-label="Yapay zekâ komutu"></textarea>
+        <textarea id="answerIn" placeholder="Yapay zekânın cevabını buraya yapıştırın" aria-label="Yapay zekâ cevabı"></textarea>
+        <div class="row"><button class="btn small primary" id="btnApply" disabled>Cevabı uygula</button></div>
+        <div class="status" id="aiStatus"></div>
+      </details>
+
+      <section class="step" id="stepExport">
+        <h2><span class="no">06</span>Dışa aktar</h2>
+        <button class="btn primary" id="btnExport" disabled>IFC dosyasını indir</button>
+        <p class="note">IFC açık BIM standardıdır (ISO 16739). Revit'te <b>Dosya › Aç › IFC</b> ile açıp <b>Farklı Kaydet › RVT</b> yapılır. FreeCAD ve Blender (Bonsai) ile ücretsiz açılır. Bu sayfada dosya ZIP içinde iner.</p>
+      </section>
+
+      <details class="step rvt" id="stepRvt">
+        <summary><span class="no">07</span>RVT inceleme</summary>
+        <p class="hint">Revit olmadan bir RVT dosyasından okunabilenler: sürüm, önizleme resmi, bağlantılar ve tip adları. 3B geometri kapalı formatta olduğu için okunamaz.</p>
+        <div class="row">
+          <label class="btn small" for="rvtInput">RVT seç</label>
+          <button class="btn small" id="btnRvtSample">Örnek RVT</button>
+          <input type="file" id="rvtInput" accept=".rvt,.rfa,.rte" hidden>
+        </div>
+        <div class="status" id="rvtStatus"></div>
+        <div id="rvtOut"></div>
+      </details>
+
+      <p class="foot">Dosyalar bilgisayarınızdan çıkmaz; bütün işlem tarayıcıda yapılır. Açık kaynak bileşenler: LibreDWG (GPL-3.0), three.js (MIT).</p>
+    </aside>
+
+    <main>
+      <div class="tabs" role="tablist">
+        <button class="tab on" role="tab" id="tabPlan" aria-selected="true">Plan</button>
+        <button class="tab" role="tab" id="tab3d" aria-selected="false">3B</button>
+        <div class="legend" id="legend2d">
+          <span><i class="dot" style="background:var(--wall-ext)"></i>Dış duvar</span>
+          <span><i class="dot" style="background:var(--wall)"></i>İç duvar</span>
+          <span><i class="dot" style="background:var(--column)"></i>Kolon</span>
+          <span><i class="dot" style="background:var(--win)"></i>Pencere</span>
+          <span><i class="dot" style="background:var(--door)"></i>Kapı</span>
+          <span><i class="dot" style="background:var(--empty)"></i>Geçiş</span>
+        </div>
+      </div>
+      <div class="stage">
+        <div id="planWrap"><canvas id="plan" aria-label="Kat planı"></canvas>
+          <div class="floating">
+            <button class="btn small" id="btnFit">Modele odaklan</button>
+            <button class="btn small" id="btnFitAll">Tüm çizim</button>
+            <button class="btn small on" id="btnDim">Çizimi soluk göster</button>
+            <button class="btn small on" id="btnTexts">Yazılar</button>
+          </div>
+        </div>
+        <div id="view3dWrap" hidden>
+          <div class="floating">
+            <button class="btn small" id="btnFrame3d">Ortala</button>
+            <button class="btn small" id="btnSpaces">Mahalleri göster</button>
+            <button class="btn small on" id="btnRoof">Tavan</button>
+          </div>
+        </div>
+        <div class="overlay" id="overlay"><div class="card"><b>Çizim yükleniyor</b><span class="hint" id="overlayMsg">Örnek proje açılıyor…</span></div></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script type="module" src="js/app.js"></script>
