@@ -10,8 +10,15 @@ const MAT = {
   lintel: { color: 0xd9d4ca }, sill: { color: 0xd9d4ca }, slab: { color: 0x9a9e98 },
   roof: { color: 0x8a8f88, transparent: true, opacity: 0.45 },
   door: { color: 0x7a5534 }, window: { color: 0x7fc6e6, transparent: true, opacity: 0.55 },
+  curtain: { color: 0x7fc6e6, transparent: true, opacity: 0.45 }, fixture: { color: 0xf1f1ee },
   space: { color: 0xf2c94c, transparent: true, opacity: 0.18, depthWrite: false },
+  // parça malzemeleri (build3d parts[].mat)
+  frame: { color: 0x4e3b2c }, leaf: { color: 0x9a6b45 }, wframe: { color: 0xe9eaea }, mullion: { color: 0x5b6168 },
+  glass: { color: 0x8fd0ea, transparent: true, opacity: 0.4, depthWrite: false }, sillstone: { color: 0xcfcfc8 },
+  ceramic: { color: 0xf6f6f3 }, seat: { color: 0xe4e4e0 }, chrome: { color: 0xc4cbd1 }, metal: { color: 0xe3e6e8 },
+  wood: { color: 0xb08a5e }, fabric: { color: 0x8da3bd }, water: { color: 0xa9d8ea, transparent: true, opacity: 0.7 },
 };
+const EDGE_MATS = new Set(['frame', 'leaf', 'wood', 'wframe', 'mullion']);
 
 export class View3D {
   constructor(container, { onSelect }) {
@@ -109,6 +116,23 @@ export class View3D {
     }
     for (const so of solids) {
       if (so.type === 'pipe' || !so.profile || so.profile.length < 3) continue;
+      // parçalı katı (kapı, pencere, cam cephe, tefriş): her parça kendi malzemesiyle ayrı örgü
+      if (so.parts && so.parts.length) {
+        for (const pt of so.parts) {
+          if (!pt.profile || pt.profile.length < 3 || pt.z1 - pt.z0 <= 1e-4) continue;
+          const shp = new THREE.Shape(pt.profile.map(([x, y]) => new THREE.Vector2(x, y)));
+          const g = new THREE.ExtrudeGeometry(shp, { depth: pt.z1 - pt.z0, bevelEnabled: false });
+          g.translate(0, 0, pt.z0);
+          const mesh = new THREE.Mesh(g, this.mats[pt.mat] || this.mats[so.type] || this.mats.wall);
+          mesh.userData = { id: so.src, type: so.type, mep: false, baseMat: mesh.material, part: pt.mat };
+          if (pt.mat === 'glass' || pt.mat === 'water') mesh.renderOrder = 1;
+          if (EDGE_MATS.has(pt.mat)) mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(g, 30), this.edgeMat));
+          this.group.add(mesh);
+          this.meshes.push(mesh);
+          box.expandByObject(mesh);
+        }
+        continue;
+      }
       const shape = new THREE.Shape(so.profile.map(([x, y]) => new THREE.Vector2(x, y)));
       const depth = so.z1 - so.z0;
       if (depth <= 1e-4) continue;

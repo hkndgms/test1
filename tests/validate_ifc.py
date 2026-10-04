@@ -5,8 +5,8 @@ logger = ifcopenshell.validate.json_logger()
 ifcopenshell.validate.validate(f, logger)
 print('schema', f.schema, 'errors', len(logger.statements))
 for s in logger.statements[:10]: print(' ', s.get('message', s)[:200] if isinstance(s, dict) else s)
-for t in ['IfcWall', 'IfcColumn', 'IfcSlab', 'IfcDoor', 'IfcWindow', 'IfcSpace']:
-    print(t, len(f.by_type(t)))
+from collections import Counter
+print(dict(Counter(p.is_a() for p in f.by_type('IfcProduct'))))
 settings = ifcopenshell.geom.settings()
 ok = bad = 0
 for p in f.by_type('IfcProduct'):

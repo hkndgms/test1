@@ -420,7 +420,7 @@ export function detect(drawing, opts) {
   };
 
   // Boşluklar: duvar ucu kenarı -> karşısındaki katı kenar
-  const openings = [];
+  let openings = [];
   for (const w of walls) {
     const n = w.poly.length;
     for (let i = 0; i < n; i++) {
@@ -463,6 +463,8 @@ export function detect(drawing, opts) {
       }
       if (blocked) continue;
       const cx = mx + nx * g / 2, cy = my + ny * g / 2;
+      // aralık başka bir duvar parçasının içinden geçiyorsa boşluk değildir (aynı hizada bölünmüş duvar)
+      if ([0.25, 0.5, 0.75].some((f) => { const px = mx + nx * g * f, py = my + ny * g * f; return walls.some((q) => q.id !== w.id && pointInPoly(px, py, q.poly)); })) continue;
       if (openings.some((o) => Math.hypot(o.center[0] - cx, o.center[1] - cy) < Math.max(tol * 5, L / 2))) continue;
       const rect = [a, b, [b[0] + nx * g, b[1] + ny * g], [a[0] + nx * g, a[1] + ny * g]];
       if (!best.strong && g > P.maxWeakGapCm * k) continue; // duvar yan yüzüne bakan geniş aralık: koridor
@@ -483,7 +485,13 @@ export function detect(drawing, opts) {
     }
     return out;
   };
-  const of = buildFaces(wallSegs.concat(colSegs, closures(openings)), tol, [minT * 0.5, maxT]);
+  // Cam / doğrama çizgileri (kapı açılış yayları hariç): cam cephe ve cam bölmeler
+  const glassSegs = glassSegments(drawing, opts.windowLayers, opts.region);
+  // Cam giydirme cephe / cam bölme: duvar boşluklarının dışında kalan ince uzun cam şeritleri
+  const curtains = findCurtains(glassSegs, { walls, openings, k, tol });
+  // cam şeritler arasındaki, açılış yayı olan aralıklar: cam cephe içindeki kapılar
+  for (const o of curtainDoors(curtains, drawing, opts, k, tol)) openings.push({ ...o, id: 'O' + (openings.length + 1), curtainDoor: true });
+  const of = buildFaces(wallSegs.concat(colSegs, glassSegs, closures(openings)), tol, [minT * 0.5, maxT]);
   let outline = null;
   for (const f of of.faces) if (f.area < 0 && (!outline || f.area < outline.area)) outline = f;
   const outlinePoly = outline ? simplifyPoly(outline.poly.slice().reverse(), tol) : null;
@@ -504,6 +512,7 @@ export function detect(drawing, opts) {
     const [a, b, c, d] = o.rect;
     const m1 = [(a[0] + d[0]) / 2, (a[1] + d[1]) / 2], m2 = [(b[0] + c[0]) / 2, (b[1] + c[1]) / 2];
     o.exterior = !!(nearOutline(m1[0], m1[1], tol * 3) || nearOutline(m2[0], m2[1], tol * 3));
+    if (o.curtainDoor) continue;
     const widthCm = o.width / k;
     o.kind = o.exterior ? 'window' : widthCm > P.maxDoorCm ? 'empty' : 'door';
   }
@@ -515,12 +524,14 @@ export function detect(drawing, opts) {
   //    boyunca uzanan paralel çizgiler (cam, denizlik)  -> pencere
   //  - kanıt yok: dış cephede dar (<80 cm) -> dolu, geniş -> geçiş; içeride -> kapı / geçiş
   classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm: P.maxDoorCm });
+  openings = expandSplits(openings);
+  openings = resolveOverlaps(openings);
 
-  // Mahaller: kapı ve pencere boşlukları kapatılarak
-  // Cam bölmeler / doğrama: duvar katmanında olmayan ama mahalleri ayıran ince elemanlar
-  // (pencere işareti katmanlarındaki çizgiler mahal sınırına katılır)
-  const glassSegs = opts.windowLayers && opts.windowLayers.size ? collectSegments(drawing, opts.windowLayers, opts.region) : [];
-  const rf = buildFaces(wallSegs.concat(colSegs, glassSegs, closures(openings.filter((o) => o.kind !== 'empty'))), tol, [minT * 0.5, maxT]);
+  // Cam şerit uçları duvara birkaç cm kala bitiyorsa bağla (doğrama ile duvar arası boşluk)
+  const connectors = curtainConnectors(curtains, walls, 12 * k);
+
+  // Mahaller: kapı ve pencere boşlukları + cam bölmeler kapatılarak
+  const rf = buildFaces(wallSegs.concat(colSegs, glassSegs, connectors, closures(openings.filter((o) => o.kind !== 'empty'))), tol, [minT * 0.5, maxT]);
   // Mahal adı: kullanıcı yazı katmanı seçtiyse yalnız onlar; seçmediyse tesisat,
   // ölçü vb. katmanlardaki yazılar hariç hepsi (mahal/oda katmanları öncelikli)
   const userText = opts.textLayers && opts.textLayers.size > 0;
@@ -540,7 +551,7 @@ export function detect(drawing, opts) {
   }
 
   return {
-    walls, columns, openings, rooms,
+    walls, columns, openings, rooms, curtains,
     outline: outlinePoly,
     stats: { wallSegs: wallSegs.length, colSegs: colSegs.length, faces: wf.faces.length },
     unitScale: 1 / k,
@@ -550,6 +561,157 @@ export function detect(drawing, opts) {
 const NON_ROOM_TEXT = /y[uü]k\b|load|^m[-_ ]|hvac|vrf|klima|yang[ıi]n|fire|spr|sprink|elektr|electr|tesisat|sıhhi|sihhi|plumb|daikin|vana|valve|boru|pipe|ölçü|olcu|dim|kot|detail|detay|ata |walky|tefri|mobilya|furn/i;
 const ROOM_TEXT = /mahal|room|space|oda|yaz[ıi]|text|txt|anno/i;
 
+
+// ---------------------------------------------------------------- cam elemanlar
+// Yay benzeri çizgi mi? (kapı açılışı: tutarlı yönde dönen, 45°–200° arası)
+export function isArcLike(pts, closed) {
+  const n = pts.length / 2;
+  if (closed || n < 5) return false;
+  let total = 0, sign = 0;
+  for (let i = 1; i < n - 1; i++) {
+    const ax = pts[2 * i] - pts[2 * i - 2], ay = pts[2 * i + 1] - pts[2 * i - 1];
+    const bx = pts[2 * i + 2] - pts[2 * i], by = pts[2 * i + 3] - pts[2 * i + 1];
+    const t = Math.atan2(ax * by - ay * bx, ax * bx + ay * by);
+    if (Math.abs(t) > 0.6) return false;
+    if (Math.abs(t) > 1e-4) { const sg = Math.sign(t); if (sign && sg !== sign) return false; sign = sg; }
+    total += t;
+  }
+  const deg = Math.abs(total) * 180 / Math.PI;
+  return deg >= 40 && deg <= 200;
+}
+
+// Üç noktadan daire merkezi (yay polyline'ı: baş, orta, son)
+export function circleCenter(pts) {
+  const n = pts.length / 2;
+  const ax = pts[0], ay = pts[1], bx = pts[2 * (n >> 1)], by = pts[2 * (n >> 1) + 1], cx = pts[2 * n - 2], cy = pts[2 * n - 1];
+  const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(d) < 1e-12) return null;
+  const a2 = ax * ax + ay * ay, b2 = bx * bx + by * by, c2 = cx * cx + cy * cy;
+  return [(a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d, (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d];
+}
+
+export function glassSegments(drawing, layers, region) {
+  if (!layers || !layers.size) return [];
+  const segs = [];
+  const inR = (x, y) => !region || (x >= region[0] && x <= region[2] && y >= region[1] && y <= region[3]);
+  for (const pr of drawing.prims) {
+    if (!layers.has(pr.l) || isArcLike(pr.pts, pr.closed)) continue;
+    const p = pr.pts, n = p.length / 2, m = pr.closed ? n : n - 1;
+    for (let i = 0; i < m; i++) {
+      const j = (i + 1) % n;
+      const x1 = p[2 * i], y1 = p[2 * i + 1], x2 = p[2 * j], y2 = p[2 * j + 1];
+      if ((x1 !== x2 || y1 !== y2) && inR(x1, y1) && inR(x2, y2)) segs.push([x1, y1, x2, y2]);
+    }
+  }
+  return segs;
+}
+
+// Cam şeritler: 1–30 cm kalınlıkta, en az 1,5 m uzunlukta, pencere boşluğu ya da duvar
+// içinde olmayan ince yüzler (giydirme cephe, cam bölme, vitrin)
+export function findCurtains(glassSegs, { walls, openings, k, tol }) {
+  if (!glassSegs.length || glassSegs.length > 40000) return [];
+  const segs = closeOpenEnds(glassSegs, tol, 1 * k, 30 * k, 3 * k + tol);
+  const f = buildFaces(segs, tol, [1 * k, 30 * k]);
+  const inAny = (x, y, polys) => polys.some((p) => pointInPoly(x, y, p));
+  const out = [];
+  for (const face of f.faces) {
+    if (face.area <= tol * tol * 4) continue;
+    const poly = simplifyPoly(face.poly, tol);
+    const A = Math.abs(polyArea(poly));
+    const t = equivThickness(A, polyPerimeter(poly));
+    const L = t > 0 ? A / t : 0;
+    if (t < 1 * k || t > 30 * k || L < 60 * k || L < 4 * t) continue;
+    const c = interiorPoint(poly);
+    const rects = openings.map((o) => o.rect);
+    if (inAny(c[0], c[1], rects) || inAny(c[0], c[1], walls.map((w) => w.poly))) continue;
+    if (poly.some((p) => inAny(p[0], p[1], rects)) || openings.some((o) => pointInPoly(o.center[0], o.center[1], poly))) continue;
+    out.push({ poly, area: A, thickness: t, length: L });
+  }
+  // iç içe olanlardan dıştakini tut
+  out.sort((a, b) => b.area - a.area);
+  const kept = [];
+  for (const g of out) { const c = interiorPoint(g.poly); if (kept.some((q) => pointInPoly(c[0], c[1], q.poly))) continue; kept.push(g); }
+  kept.forEach((g, i) => (g.id = 'G' + (i + 1)));
+  return kept;
+}
+
+// Cam şerit köşesi ile en yakın duvar kenarı arasında kısa bağlantı çizgisi
+export function curtainConnectors(curtains, walls, maxD) {
+  const out = [];
+  const nearestOnEdge = (x, y, a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1;
+    const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / L2));
+    return [a[0] + dx * t, a[1] + dy * t];
+  };
+  for (const g of curtains) {
+    const bb = polyBBox(g.poly);
+    for (const v of g.poly) {
+      let best = null;
+      for (const w of walls) {
+        const wb = polyBBox(w.poly);
+        if (wb[0] > bb[2] + maxD || wb[2] < bb[0] - maxD || wb[1] > bb[3] + maxD || wb[3] < bb[1] - maxD) continue;
+        for (let i = 0; i < w.poly.length; i++) {
+          const q = nearestOnEdge(v[0], v[1], w.poly[i], w.poly[(i + 1) % w.poly.length]);
+          const d = Math.hypot(q[0] - v[0], q[1] - v[1]);
+          if (d > 1e-9 && d <= maxD && (!best || d < best.d)) best = { d, q };
+        }
+      }
+      if (best) out.push([v[0], v[1], best.q[0], best.q[1]]);
+    }
+  }
+  return out;
+}
+
+// Aynı doğrultudaki iki cam şerit arasında 60–400 cm aralık ve yanında açılış yayı varsa kapı
+export function curtainDoors(curtains, drawing, opts, k, tol) {
+  const axis = (g) => {
+    let best = null;
+    for (let i = 0; i < g.poly.length; i++) {
+      const a = g.poly[i], b = g.poly[(i + 1) % g.poly.length];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (!best || L > best.L) best = { L, ux: (b[0] - a[0]) / L, uy: (b[1] - a[1]) / L };
+    }
+    const c = interiorPoint(g.poly);
+    let lo = Infinity, hi = -Infinity;
+    for (const p of g.poly) { const s = (p[0] - c[0]) * best.ux + (p[1] - c[1]) * best.uy; lo = Math.min(lo, s); hi = Math.max(hi, s); }
+    return { c, ux: best.ux, uy: best.uy, lo, hi };
+  };
+  const arcs = [];
+  const layers = new Set([...(opts.windowLayers || []), ...(opts.doorLayers || [])]);
+  for (const pr of drawing.prims) if (layers.has(pr.l) && isArcLike(pr.pts, pr.closed)) arcs.push(pr.pts);
+  const out = [];
+  const ax = curtains.map(axis);
+  for (let i = 0; i < curtains.length; i++) for (let j = i + 1; j < curtains.length; j++) {
+    const A = ax[i], B = ax[j];
+    if (Math.abs(A.ux * B.uy - A.uy * B.ux) > 0.03) continue;
+    const dx = B.c[0] - A.c[0], dy = B.c[1] - A.c[1];
+    const lateral = Math.abs(dx * -A.uy + dy * A.ux);
+    if (lateral > 15 * k) continue;
+    const along = dx * A.ux + dy * A.uy;
+    // A'nın ucu ile B'nin karşı ucu arası
+    const bLo = along + Math.min(B.lo * (A.ux * B.ux + A.uy * B.uy), B.hi * (A.ux * B.ux + A.uy * B.uy));
+    const bHi = along + Math.max(B.lo * (A.ux * B.ux + A.uy * B.uy), B.hi * (A.ux * B.ux + A.uy * B.uy));
+    let g0, g1;
+    if (bLo > A.hi) { g0 = A.hi; g1 = bLo; } else if (A.lo > bHi) { g0 = bHi; g1 = A.lo; } else continue;
+    const gap = g1 - g0;
+    if (gap < 60 * k || gap > 400 * k) continue;
+    const mid = (g0 + g1) / 2;
+    // aralıkta üçüncü bir cam şerit varsa bu çift komşu değildir
+    if (ax.some((C, q) => q !== i && q !== j && Math.abs((C.c[0] - A.c[0]) * -A.uy + (C.c[1] - A.c[1]) * A.ux) <= 15 * k &&
+      (() => { const s = (C.c[0] - A.c[0]) * A.ux + (C.c[1] - A.c[1]) * A.uy; return s > g0 && s < g1; })())) continue;
+    const cx = A.c[0] + A.ux * mid, cy = A.c[1] + A.uy * mid;
+    const t = Math.max(curtains[i].thickness, curtains[j].thickness, 5 * k);
+    // yay kanıtı: yayın bir noktası aralığın yakınında
+    const near = arcs.some((pts) => { for (let q = 0; q < pts.length; q += 2) { const ex = pts[q] - cx, ey = pts[q + 1] - cy; if (Math.abs(ex * A.ux + ey * A.uy) <= gap / 2 + 10 * k && Math.abs(ex * -A.uy + ey * A.ux) <= gap) return true; } return false; });
+    if (!near) continue;
+    const nx = -A.uy, ny = A.ux, hw = gap / 2, ht = t / 2;
+    // rect sırası duvar boşluklarıyla aynı: [a, b, b + along*g, a + along*g] (a-b uç kenarı)
+    const a0 = [cx - A.ux * hw - nx * ht, cy - A.uy * hw - ny * ht], b0 = [cx - A.ux * hw + nx * ht, cy - A.uy * hw + ny * ht];
+    const rect = [a0, b0, [b0[0] + A.ux * gap, b0[1] + A.uy * gap], [a0[0] + A.ux * gap, a0[1] + A.uy * gap]];
+    out.push({ kind: 'door', rect, center: [cx, cy], width: gap, thickness: t, along: [A.ux, A.uy], across: [nx, ny], exterior: true, hostWall: null, weak: false, why: 'Cam cephe içinde açılış yaylı kapı', marker: 'door' });
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------- boşluk sınıflandırma
 const STRUCT_RE = /strukt|struct|beton|concrete|kolon|column|perde|\btrm\b|-trm|tarama|hatch|solid|betonarme/i;
@@ -581,8 +743,13 @@ export function classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm })
   };
   const segs = [];
   for (const pr of drawing.prims) {
-    const c = layerClass(pr.l);
-    if (c === 'skip' || c === 'wall') continue;
+    const c0 = layerClass(pr.l);
+    if (c0 === 'skip') continue;
+    // kapı/pencere ortak katmanlarında açılış yayı kapı kanıtıdır, düz çizgiler cam kanıtı
+    const arc = (c0 === 'win' || c0 === 'door') && isArcLike(pr.pts, pr.closed);
+    const c = c0 === 'win' && arc ? 'door' : c0;
+    // yayın menteşe noktası (daire merkezi): komşu kapının yayı bu boşluğa kanıt sayılmasın
+    const hinge = arc ? circleCenter(pr.pts) : null;
     const p = pr.pts, n = p.length / 2;
     const m = pr.closed ? n : n - 1;
     for (let i = 0; i < m; i++) {
@@ -591,7 +758,7 @@ export function classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm })
       if (Math.max(x1, x2) < bx0 || Math.min(x1, x2) > bx1 || Math.max(y1, y2) < by0 || Math.min(y1, y2) > by1) continue;
       if (region && (Math.max(x1, x2) < region[0] || Math.min(x1, x2) > region[2] || Math.max(y1, y2) < region[1] || Math.min(y1, y2) > region[3])) continue;
       const idx = segs.length;
-      segs.push([x1, y1, x2, y2, c]);
+      segs.push([x1, y1, x2, y2, c, hinge]);
       const i0 = Math.floor((Math.min(x1, x2) - bx0) / cell), i1 = Math.floor((Math.max(x1, x2) - bx0) / cell);
       const j0 = Math.floor((Math.min(y1, y2) - by0) / cell), j1 = Math.floor((Math.max(y1, y2) - by0) / cell);
       if ((i1 - i0 + 1) * (j1 - j0 + 1) > 400) continue;
@@ -607,6 +774,7 @@ export function classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm })
     return out;
   };
   for (const o of openings) {
+    if (o.curtainDoor) continue; // cam cephe kapısı: kanıtı zaten yay
     const [cx, cy] = o.center, al = o.along, ac = o.across;
     const hw = o.width / 2, ht = o.thickness / 2;
     // yerel koordinat: a = duvar ekseni boyunca, c = duvara dik
@@ -623,13 +791,43 @@ export function classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm })
       }
       return Math.hypot(da, dc) * Math.max(0, t1 - t0);
     };
-    let structLen = 0, winHit = false, doorHit = false, glazing = 0, glazingLong = 0;
+    let structLen = 0, winHit = false, doorHit = false, glazing = 0, glazingLong = 0, wallRun = 0;
+    // boşluk ekseni boyunca kanıt aralıkları (geniş boşlukları kapı + cam olarak bölmek için)
+    const doorRange = [Infinity, -Infinity];
+    const glassRanges = [];
+    const alongRange = (s) => { const [pa] = loc(s[0], s[1]), [qa] = loc(s[2], s[3]); return [Math.max(-hw, Math.min(pa, qa)), Math.min(hw, Math.max(pa, qa))]; };
+    const parallel = (s) => { const [pa, pc] = loc(s[0], s[1]), [qa, qc] = loc(s[2], s[3]); const L = Math.hypot(qa - pa, qc - pc); return L > 1e-9 && Math.abs(qc - pc) / L < 0.05 ? [pa, qa, (pc + qc) / 2, L] : null; };
     for (const n of around(o, Math.max(o.width, 60 * k))) {
       const s = segs[n], c = s[4];
-      if (c === 'door') { if (clipLen(s, -hw - 5 * k, hw + 5 * k, -ht - Math.max(o.width, 30 * k), ht + Math.max(o.width, 30 * k)) > 0) doorHit = true; continue; }
+      if (c === 'door') {
+        let hit;
+        if (s[5]) { // yay: menteşe boşluğun kenarına yakın olmalı (15 cm)
+          const [ha, hc] = loc(s[5][0], s[5][1]);
+          hit = Math.abs(ha) <= hw + 15 * k && Math.abs(hc) <= ht + 15 * k;
+        } else hit = clipLen(s, -hw - 5 * k, hw + 5 * k, -ht - 15 * k, ht + 15 * k) > 0; // kanat/kasa çizgisi duvar yüzünden başlar
+        if (hit) {
+          doorHit = true;
+          const r = alongRange(s);
+          doorRange[0] = Math.min(doorRange[0], r[0]); doorRange[1] = Math.max(doorRange[1], r[1]);
+        }
+        continue;
+      }
+      if (c === 'wall') {
+        // duvar katmanında boşluk boyunca süren çizgi: dış/iç çizgisi eksik tek çizgili duvar
+        const pr = parallel(s);
+        if (pr && Math.abs(pr[2]) <= ht + 2 * k) wallRun = Math.max(wallRun, clipLen(s, -hw, hw, -ht - 2 * k, ht + 2 * k));
+        continue;
+      }
       const inside = clipLen(s, -hw * 0.9, hw * 0.9, -ht * 0.9, ht * 0.9);
       if (c === 'struct') { structLen += inside; continue; }
-      if (c === 'win') { if (clipLen(s, -hw, hw, -ht - 20 * k, ht + 20 * k) > 0) winHit = true; continue; }
+      if (c === 'win') {
+        if (clipLen(s, -hw, hw, -ht - 20 * k, ht + 20 * k) > 0) {
+          winHit = true;
+          const pr = parallel(s);
+          if (pr && Math.abs(pr[2]) <= ht + 20 * k) { const r = alongRange(s); if (r[1] - r[0] > 10 * k) glassRanges.push(r); }
+        }
+        continue;
+      }
       // genel mimari çizgi: boşluk boyunca uzanan paralel çizgi (cam / denizlik)
       const [pa, pc] = loc(s[0], s[1]), [qa, qc] = loc(s[2], s[3]);
       const L = Math.hypot(qa - pa, qc - pc);
@@ -647,6 +845,7 @@ export function classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm })
     if (structLen > Math.max(o.thickness * 3, Math.sqrt(area) * 2)) { kind = 'solid'; why = 'İçi taşıyıcı tarama / beton çizgileriyle dolu'; }
     else if (doorHit) { kind = 'door'; why = 'Kapı işareti (açılış yayı) var'; }
     else if (winHit) { kind = 'window'; why = 'Cam / doğrama çizgisi boşluğu kesiyor'; }
+    else if (wallRun >= 0.9 * o.width) { kind = 'solid'; why = 'Duvar çizgisi boşluk boyunca sürüyor (tek çizgili duvar)'; }
     else if (o.exterior && glazing >= 1) { kind = 'window'; why = `Boşlukla sınırlı ${glazing} paralel çizgi (cam/denizlik) var`; }
     else if (o.exterior && glazingLong >= 2 && widthCm >= 80) { kind = 'window'; why = `Boşluktan geçen ${glazingLong} paralel çizgi var (cam olabilir)`; }
     else if (o.exterior) { kind = widthCm < 80 ? 'solid' : 'empty'; why = widthCm < 80 ? 'Dış cephede dar boşluk, cam izi yok' : 'Dış cephede cam izi yok (açıklık sayıldı)'; }
@@ -656,7 +855,66 @@ export function classifyOpenings(drawing, openings, { opts, k, tol, maxDoorCm })
     o.kind = kind;
     o.why = why;
     o.marker = doorHit ? 'door' : winHit ? 'window' : undefined;
+    // 3 m ve daha geniş dış cam boşluğu: vitrin / cam cephe gibi tam yükseklik cam (parapetsiz)
+    o.fullHeight = kind === 'window' && o.exterior && widthCm >= 300;
+    // Geniş boşlukta kapı yayı yalnız bir kısmı kaplıyor, kalanında cam çizgisi var:
+    // kapı + cam (pencere/cam cephe) olarak böl
+    if (kind === 'door' && doorRange[1] > doorRange[0]) {
+      const dw = doorRange[1] - doorRange[0];
+      if (dw < 0.7 * o.width && dw >= 50 * k) {
+        const cover = (a0, a1) => { let t = 0; for (const r of glassRanges) t += Math.max(0, Math.min(a1, r[1]) - Math.max(a0, r[0])); return t; };
+        const d0 = Math.max(-hw, doorRange[0] - 3 * k), d1 = Math.min(hw, doorRange[1] + 3 * k);
+        const parts = [];
+        if (d0 - -hw >= 40 * k && cover(-hw, d0) >= 0.5 * (d0 + hw)) parts.push({ a0: -hw, a1: d0, kind: 'window' });
+        parts.push({ a0: parts.length ? d0 : -hw, a1: hw - d1 >= 40 * k && cover(d1, hw) >= 0.5 * (hw - d1) ? d1 : hw, kind: 'door' });
+        if (parts[parts.length - 1].a1 < hw) parts.push({ a0: d1, a1: hw, kind: 'window' });
+        if (parts.length > 1) o.split = parts;
+      }
+    }
   }
+}
+
+// Bölünmüş boşlukları (kapı + cam) ayrı boşluklara açar; kimlikler yeniden verilir
+export function expandSplits(openings) {
+  const out = [];
+  for (const o of openings) {
+    if (!o.split) { out.push(o); continue; }
+    const al = o.along, ac = o.across, ht = o.thickness / 2;
+    for (const p of o.split) {
+      const w = p.a1 - p.a0;
+      const mid = (p.a0 + p.a1) / 2;
+      const cx = o.center[0] + al[0] * mid, cy = o.center[1] + al[1] * mid;
+      const p0 = [cx - al[0] * w / 2, cy - al[1] * w / 2];
+      const a = [p0[0] - ac[0] * ht, p0[1] - ac[1] * ht], b = [p0[0] + ac[0] * ht, p0[1] + ac[1] * ht];
+      const rect = [a, b, [b[0] + al[0] * w, b[1] + al[1] * w], [a[0] + al[0] * w, a[1] + al[1] * w]];
+      out.push({ ...o, split: undefined, kind: p.kind, rect, center: [cx, cy], width: w, marker: p.kind,
+        why: p.kind === 'door' ? 'Geniş boşlukta açılış yayı olan kısım (kapı)' : 'Geniş boşlukta kapı yanındaki cam kısım' });
+    }
+  }
+  out.forEach((o, i) => (o.id = 'O' + (i + 1)));
+  return out;
+}
+
+// Üst üste binen boşluklardan kanıtı zayıf olanı çıkarır (hiçbir kapı/pencere/cam üst üste binmez)
+export function resolveOverlaps(openings) {
+  const inRect = (p, r) => pointInPoly(p[0], p[1], r);
+  // köşe teması (T birleşimindeki iki kapı gibi) çakışma sayılmaz: merkez içeride ya da ≥2 köşe içeride
+  const cnt = (a, b) => a.rect.filter((p) => inRect(p, b.rect)).length;
+  const overlaps = (a, b) => inRect(a.center, b.rect) || inRect(b.center, a.rect) || cnt(a, b) >= 2 || cnt(b, a) >= 2;
+  const score = (o) => (o.marker === 'door' ? 4 : o.marker === 'window' ? 3 : o.kind === 'solid' ? 2 : o.kind === 'empty' ? 0 : 1) * 1e6 - o.width;
+  const drop = new Set();
+  for (let i = 0; i < openings.length; i++) for (let j = i + 1; j < openings.length; j++) {
+    if (drop.has(i) || drop.has(j)) continue;
+    const a = openings[i], b = openings[j];
+    const d = Math.hypot(a.center[0] - b.center[0], a.center[1] - b.center[1]);
+    if (d > (a.width + b.width) / 2 + Math.max(a.thickness, b.thickness)) continue;
+    if (!overlaps(a, b)) continue;
+    drop.add(score(a) >= score(b) ? j : i);
+  }
+  if (!drop.size) return openings;
+  const out = openings.filter((_, i) => !drop.has(i));
+  out.forEach((o, i) => (o.id = 'O' + (i + 1)));
+  return out;
 }
 
 function distToPoly(x, y, poly) {

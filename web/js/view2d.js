@@ -47,6 +47,7 @@ export class Plan2D {
     this.fit(d.bbox);
   }
 
+  setFixtures(list) { this.fixtures = list || []; this.draw(); }
   setModel(model, overrides) {
     this.model = model;
     this.overrides = overrides || {};
@@ -268,6 +269,25 @@ export class Plan2D {
       ctx.fillStyle = C[KIND_COLOR[kind]];
       ctx.fill();
     }
+    // cam cephe / cam bölme: pencere renginde şerit
+    for (const g of m.curtains || []) {
+      if (ov[g.id]?.deleted) continue;
+      poly(g.poly);
+      ctx.fillStyle = C.win;
+      ctx.fill();
+      ctx.strokeStyle = C.wallEdge;
+      ctx.stroke();
+    }
+    // tefriş: açık dolgu + kenar
+    for (const f of this.fixtures || []) {
+      if (ov[f.id]?.deleted) continue;
+      poly(f.poly);
+      ctx.fillStyle = C.fixture;
+      ctx.fill();
+      ctx.strokeStyle = C.muted;
+      ctx.lineWidth = 1 / scale;
+      ctx.stroke();
+    }
     if (m.outline) {
       poly(m.outline);
       ctx.setLineDash([10 / scale, 6 / scale]);
@@ -277,7 +297,7 @@ export class Plan2D {
       ctx.setLineDash([]);
     }
     // seçili
-    const sel = this.selected && findById(m, this.selected);
+    const sel = this.selected && (findById(m, this.selected) || (this.fixtures || []).find((f) => f.id === this.selected));
     if (sel) {
       poly(sel.rect || sel.poly);
       ctx.strokeStyle = C.accent;
@@ -314,12 +334,15 @@ export class Plan2D {
     if (!m) return null;
     const ov = this.overrides;
     for (const o of m.openings) if (!ov[o.id]?.deleted && pointInPoly(x, y, o.rect)) return o.id;
+    for (const f of this.fixtures || []) if (!ov[f.id]?.deleted && pointInPoly(x, y, f.poly)) return f.id;
+    for (const g of m.curtains || []) if (!ov[g.id]?.deleted && pointInPoly(x, y, g.poly)) return g.id;
     for (const c of m.columns) if (!ov[c.id]?.deleted && pointInPoly(x, y, c.poly)) return c.id;
     for (const w of m.walls) if (!ov[w.id]?.deleted && pointInPoly(x, y, w.poly)) return w.id;
     // ince elemanlar için küçük tolerans: 6 piksel çevresini dene
     const t = 6 / this.view.scale;
     for (const [dx, dy] of [[t, 0], [-t, 0], [0, t], [0, -t]]) {
       for (const o of m.openings) if (!ov[o.id]?.deleted && pointInPoly(x + dx, y + dy, o.rect)) return o.id;
+      for (const g of m.curtains || []) if (!ov[g.id]?.deleted && pointInPoly(x + dx, y + dy, g.poly)) return g.id;
       for (const w of m.walls) if (!ov[w.id]?.deleted && pointInPoly(x + dx, y + dy, w.poly)) return w.id;
     }
     for (const r of m.rooms) if (!ov[r.id]?.deleted && pointInPoly(x, y, r.poly)) return r.id;
@@ -423,7 +446,8 @@ export function findMepById(mep, id) {
 export function findById(m, id) {
   if (!m || !id) return null;
   return m.openings.find((o) => o.id === id) || m.walls.find((w) => w.id === id)
-    || m.columns.find((c) => c.id === id) || m.rooms.find((r) => r.id === id) || null;
+    || m.columns.find((c) => c.id === id) || m.rooms.find((r) => r.id === id)
+    || (m.curtains || []).find((g) => g.id === id) || null;
 }
 
 function labelPoint(poly) {

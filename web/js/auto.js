@@ -126,8 +126,10 @@ export function autoSetup(d, { params, units: declared, kb, islands: given, only
   // kapı / pencere işaret katmanları
   d.layers.forEach((l, i) => {
     if (!l.count || out.roles.wall.has(i) || SKIP_MARK_RE.test(l.name)) return;
-    if (DOOR_RE.test(l.name)) out.roles.door.add(i);
-    else if (WIN_RE.test(l.name)) out.roles.window.add(i);
+    // kapı + pencere ortak katmanları (DOOR WINDOW, KAPI-PENCERE, doğrama) cam/pencere rolüne
+    // girer; kapılar bu katmanda açılış yaylarından ayrıca tanınır
+    if (WIN_RE.test(l.name)) out.roles.window.add(i);
+    else if (DOOR_RE.test(l.name)) out.roles.door.add(i);
   });
   return out;
 }

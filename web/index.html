@@ -19,7 +19,7 @@
   --canvas: #fbfcf9; --field: #ffffff; --warn: #a15c00; --bad: #b3261e; --good: #2e7d43;
   --wall: #cfc7b8; --wall-ext: #b0573b; --wall-edge: #6b4a3c; --column: #43526e;
   --win: rgba(36, 160, 212, .85); --door: rgba(52, 150, 72, .85); --empty: rgba(150, 150, 140, .45);
-  --room: rgba(240, 196, 64, .16); --room-sel: rgba(240, 196, 64, .38); --outline: #2e7d43;
+  --room: rgba(240, 196, 64, .16); --room-sel: rgba(240, 196, 64, .38); --outline: #2e7d43; --fixture: rgba(90, 100, 96, .22);
   --font-ui: 'Barlow', 'Segoe UI', system-ui, sans-serif;
   --font-head: 'Barlow Condensed', 'Barlow', 'Arial Narrow', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
@@ -31,7 +31,7 @@
   --canvas: #0f1211; --field: #101413; --warn: #f0b45c; --bad: #ff8a80; --good: #7fd18f;
   --wall: #8c8476; --wall-ext: #c96b4c; --wall-edge: #d8c4b8; --column: #8fa2c6;
   --win: rgba(70, 190, 240, .8); --door: rgba(96, 200, 116, .8); --empty: rgba(170, 170, 160, .35);
-  --room: rgba(240, 196, 64, .10); --room-sel: rgba(240, 196, 64, .28); --outline: #7fd18f;
+  --room: rgba(240, 196, 64, .10); --room-sel: rgba(240, 196, 64, .28); --outline: #7fd18f; --fixture: rgba(200, 210, 205, .22);
   color-scheme: dark;
 } }
 :root[data-theme="dark"] {
@@ -40,7 +40,7 @@
   --canvas: #0f1211; --field: #101413; --warn: #f0b45c; --bad: #ff8a80; --good: #7fd18f;
   --wall: #8c8476; --wall-ext: #c96b4c; --wall-edge: #d8c4b8; --column: #8fa2c6;
   --win: rgba(70, 190, 240, .8); --door: rgba(96, 200, 116, .8); --empty: rgba(170, 170, 160, .35);
-  --room: rgba(240, 196, 64, .10); --room-sel: rgba(240, 196, 64, .28); --outline: #7fd18f;
+  --room: rgba(240, 196, 64, .10); --room-sel: rgba(240, 196, 64, .28); --outline: #7fd18f; --fixture: rgba(200, 210, 205, .22);
   color-scheme: dark;
 }
 html, body { height: 100%; }
@@ -256,6 +256,16 @@ li.sev-medium i { color: var(--warn) !important; }
   .legend { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.welcome { position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--canvas) 70%, transparent); z-index: 6; padding: 16px; }
+.welcome .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 22px 24px; max-width: 60ch; display: grid; gap: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.18); }
+.welcome h2 { margin: 0; font: 700 26px/1.1 var(--font-head); letter-spacing: .03em; text-transform: uppercase; }
+.welcome h2 b { color: var(--accent); }
+.welcome p { margin: 0; color: var(--muted); }
+.welcome ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.welcome ol b { color: var(--ink); }
+.welcome .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.welcome .fine { font-size: 12px; color: var(--muted); }
 </style>
 <script type="importmap">
 { "imports": {
@@ -269,6 +279,7 @@ li.sev-medium i { color: var(--warn) !important; }
     <div class="brand"><h1>DWG<b>2</b>BIM</h1><span>Kat planından mimari + tesisat BIM modeli</span></div>
     <div class="spacer"></div>
     <span class="filechip" id="fileChip">Dosya yok</span>
+    <button class="btn" id="btnHelp" title="Nasıl kullanılır?">Nasıl çalışır?</button>
     <label class="btn" for="fileInput">Dosya aç</label>
     <button class="btn primary" id="btnExportTop" disabled>IFC indir</button>
     <input type="file" id="fileInput" accept=".dwg,.dxf" hidden>
@@ -287,7 +298,7 @@ li.sev-medium i { color: var(--warn) !important; }
       <div class="panel" id="pSum" role="tabpanel">
         <div class="drop" id="drop"><b>DWG / DXF dosyasını buraya bırakın</b>
           <span class="hint">veya üstteki <i>Dosya aç</i> düğmesini kullanın</span>
-          <button class="btn small" id="btnSample">Örnek proje: Taziye Evi</button>
+          <button class="btn small" id="btnDemo">Demo binayı aç</button>
         </div>
         <div class="status" id="status" role="status" aria-live="polite"></div>
 
@@ -333,7 +344,6 @@ li.sev-medium i { color: var(--warn) !important; }
           <p class="hint">Revit olmadan okunabilenler: sürüm, önizleme, bağlantılar, tip adları. 3B geometri kapalı formatta olduğu için okunamaz.</p>
           <div class="row">
             <label class="btn small" for="rvtInput">RVT seç</label>
-            <button class="btn small" id="btnRvtSample">Örnek RVT</button>
             <input type="file" id="rvtInput" accept=".rvt,.rfa,.rte" hidden>
           </div>
           <div class="status" id="rvtStatus"></div>
@@ -469,6 +479,7 @@ li.sev-medium i { color: var(--warn) !important; }
           <span><i class="dot" style="background:var(--column)"></i>Kolon</span>
           <span><i class="dot" style="background:var(--win)"></i>Pencere</span>
           <span><i class="dot" style="background:var(--door)"></i>Kapı</span>
+          <span><i class="dot" style="background:var(--fixture); border:1px solid var(--muted)"></i>Tefriş</span>
         </div>
       </div>
       <div class="stage">
@@ -497,7 +508,7 @@ li.sev-medium i { color: var(--warn) !important; }
           </div>
         </div>
         <div class="demobar" id="demoBar" hidden>
-          <span><b>Demo</b> · Taziye Evi: yapay zekâ ile düzeltilmiş model ve otomatik gezi. Kendi DWG dosyanızı yükleyince önce analiz yapılır, yapay zekânın cevabı uygulanır, sonra model gösterilir.</span>
+          <span><b>Demo</b> · Program tarafından üretilen örnek bir bina: duvarlar, cam cephe, kapı ve pencereler, ıslak hacim tefrişi, klima ve borular. Plandaki veya 3B'deki öğelere tıklayın; <b>Otomatik gezi</b> düğmesiyle içeride dolaşın. Kendi DWG dosyanızı yükleyince önce analiz yapılır, yapay zekânın cevabı uygulanır, sonra model gösterilir.</span>
           <div class="row"><label class="btn small primary" for="fileInput">Kendi dosyamı yükle</label><button class="btn small" id="demoClose">Kapat</button></div>
         </div>
         <div class="wiz" id="wiz" hidden>
@@ -514,7 +525,7 @@ li.sev-medium i { color: var(--warn) !important; }
             </ol>
             <div class="status" id="wizStatus"></div>
             <div class="row">
-              <button class="btn primary" id="wizShow3d">3B göster ve gez</button>
+              <button class="btn primary" id="wizShow3d">3B göster</button>
               <button class="btn" id="wizShow2d">2B göster</button>
               <span class="hint" id="wizSkipHint">Cevap olmadan da gösterebilirsiniz.</span>
             </div>
@@ -532,6 +543,23 @@ li.sev-medium i { color: var(--warn) !important; }
             <div class="field"><label for="ceilDlgCm">Asma tavan kotu</label><div class="unit" data-u="cm"><input type="number" id="ceilDlgCm" min="150" step="5" value="280"></div></div>
             <div><div class="hint" id="ceilDlgCandHint">Çizimde geçen kotlar:</div><div class="cands" id="ceilDlgCands"></div></div>
             <div class="row"><button class="btn primary" id="ceilDlgOk">Uygula</button><button class="btn" id="ceilDlgLater">Şimdilik 280 cm</button></div>
+          </div>
+        </div>
+        <div class="welcome" id="welcome" hidden>
+          <div class="card" role="dialog" aria-labelledby="welcomeTitle">
+            <h2 id="welcomeTitle">DWG<b>2</b>BIM</h2>
+            <p>AutoCAD kat planını (DWG/DXF) tarayıcıda okur; duvar, kolon, kapı, pencere, cam cephe, mahal, tefriş ve mekanik tesisatı tanıyıp 3B BIM modeline çevirir. <b>IFC</b> olarak indirirsiniz; Revit, FreeCAD ve Blender açar. Dosyanız bilgisayarınızdan çıkmaz.</p>
+            <ol>
+              <li><b>Dosyayı açın.</b> DWG/DXF'yi sürükleyip bırakın. Pafta ayrık çizim gruplarına bölünür, asıl plan ve katman rolleri otomatik seçilir.</li>
+              <li><b>Analiz ve yapay zekâ.</b> Program emin olamadığı noktaları listeler ve bir komut üretir; komutu Claude/ChatGPT'ye yapıştırın, cevabı geri yapıştırın. Düzeltmeler ve gezi rotası otomatik uygulanır. (İsterseniz bu adımı atlayın.)</li>
+              <li><b>İnceleyin, düzeltin, indirin.</b> Plan ve 3B görünümde öğelere tıklayarak tür ve ölçü değiştirin; <i>Otomatik gezi</i> ile içeride dolaşın; <i>IFC indir</i> ile alın.</li>
+            </ol>
+            <div class="row">
+              <button class="btn primary" id="welcomeDemo">Demo binayı gör</button>
+              <label class="btn" for="fileInput">Kendi dosyamı aç</label>
+              <button class="btn" id="welcomeClose">Kapat</button>
+            </div>
+            <span class="fine">Açık kaynak, sunucusuz. Tesisat kotu projede yoksa size sorulur; bilinmeyen katmanlar için bilgi bankası yapay zekâdan kural öğrenir.</span>
           </div>
         </div>
         <div class="overlay" id="overlay"><div class="card"><b>Çizim yükleniyor</b><span class="hint" id="overlayMsg">Örnek proje açılıyor…</span></div></div>

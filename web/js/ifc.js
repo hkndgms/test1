@@ -65,7 +65,8 @@ export function writeIfc(build, { fileName = 'model.ifc', timestamp = new Date()
   const u3 = add('IFCSIUNIT(*,.VOLUMEUNIT.,$,.CUBIC_METRE.)');
   const u4 = add('IFCSIUNIT(*,.PLANEANGLEUNIT.,$,.RADIAN.)');
   const units = add(`IFCUNITASSIGNMENT((${u1},${u2},${u3},${u4}))`);
-  const project = add(`IFCPROJECT('${ifcGuid()}',$,${stepStr(P.projectName)},$,$,$,$,(${ctx}),${units})`);
+  const projName = P.projectName || fileName.replace(/\.ifc$/i, '').replace(/_/g, ' ') || 'DWG2BIM';
+  const project = add(`IFCPROJECT('${ifcGuid()}',$,${stepStr(projName)},$,$,$,$,(${ctx}),${units})`);
 
   const place = (rel, z = 0) => {
     const pt = z ? add(`IFCCARTESIANPOINT((0.,0.,${real(z)}))`) : origin;
@@ -75,7 +76,7 @@ export function writeIfc(build, { fileName = 'model.ifc', timestamp = new Date()
   const sitePl = place(null);
   const site = add(`IFCSITE('${ifcGuid()}',$,'Arsa',$,$,${sitePl},$,$,.ELEMENT.,$,$,$,$,$)`);
   const bldPl = place(sitePl);
-  const building = add(`IFCBUILDING('${ifcGuid()}',$,${stepStr(P.projectName)},$,$,${bldPl},$,$,.ELEMENT.,$,$,$)`);
+  const building = add(`IFCBUILDING('${ifcGuid()}',$,${stepStr(projName)},$,$,${bldPl},$,$,.ELEMENT.,$,$,$)`);
   const elev = P.levelCm / 100;
   const stPl = place(bldPl, elev);
   const storey = add(`IFCBUILDINGSTOREY('${ifcGuid()}',$,${stepStr(P.storeyName)},$,$,${stPl},$,$,.ELEMENT.,${real(elev)})`);
@@ -83,13 +84,32 @@ export function writeIfc(build, { fileName = 'model.ifc', timestamp = new Date()
   add(`IFCRELAGGREGATES('${ifcGuid()}',$,$,$,${site},(${building}))`);
   add(`IFCRELAGGREGATES('${ifcGuid()}',$,$,$,${building},(${storey}))`);
 
-  const extrude = (profile, depth) => {
+  const extrudeItem = (profile, depth, z = 0) => {
     const pts = profile.map(([x, y]) => add(`IFCCARTESIANPOINT((${real(x)},${real(y)}))`));
     const pl = add(`IFCPOLYLINE((${pts.join(',')},${pts[0]}))`);
     const prof = add(`IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,$,${pl})`);
-    const solid = add(`IFCEXTRUDEDAREASOLID(${prof},${wcs},${zDir},${real(depth)})`);
-    const rep = add(`IFCSHAPEREPRESENTATION(${body},'Body','SweptSolid',(${solid}))`);
+    const pos = z ? add(`IFCAXIS2PLACEMENT3D(${add(`IFCCARTESIANPOINT((0.,0.,${real(z)}))`)},${zDir},${xDir})`) : wcs;
+    return add(`IFCEXTRUDEDAREASOLID(${prof},${pos},${zDir},${real(depth)})`);
+  };
+  const extrude = (profile, depth) => {
+    const rep = add(`IFCSHAPEREPRESENTATION(${body},'Body','SweptSolid',(${extrudeItem(profile, depth)}))`);
     return add(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
+  };
+  // parçalı katı: her parça, elemanın yerleşimine (z = so.z0) göre kendi kotunda ayrı bir katı
+  const partsShape = (so) => {
+    const items = so.parts.filter((p) => p.profile.length >= 3 && p.z1 - p.z0 > 1e-4).map((p) => extrudeItem(p.profile, p.z1 - p.z0, p.z0 - so.z0));
+    if (!items.length) return null;
+    const rep = add(`IFCSHAPEREPRESENTATION(${body},'Body','SweptSolid',(${items.join(',')}))`);
+    return add(`IFCPRODUCTDEFINITIONSHAPE($,$,(${rep}))`);
+  };
+  // tefriş türü -> IFC varlığı ve öntanımlı tip
+  const FIXTURE_IFC = {
+    wc: ['IFCSANITARYTERMINAL', 'TOILETPAN'], squat: ['IFCSANITARYTERMINAL', 'TOILETPAN'], urinal: ['IFCSANITARYTERMINAL', 'URINAL'],
+    sink: ['IFCSANITARYTERMINAL', 'WASHHANDBASIN'], ksink: ['IFCSANITARYTERMINAL', 'SINK'], shower: ['IFCSANITARYTERMINAL', 'SHOWER'],
+    bathtub: ['IFCSANITARYTERMINAL', 'BATH'], faucet: ['IFCVALVE', 'FAUCET'], drain: ['IFCWASTETERMINAL', 'FLOORTRAP'],
+    ac: ['IFCUNITARYEQUIPMENT', 'SPLITSYSTEM'], radiator: ['IFCSPACEHEATER', 'RADIATOR'],
+    table: ['IFCFURNITURE', 'TABLE'], desk: ['IFCFURNITURE', 'DESK'], chair: ['IFCFURNITURE', 'CHAIR'], sofa: ['IFCFURNITURE', 'SOFA'],
+    bed: ['IFCFURNITURE', 'BED'], cabinet: ['IFCFURNITURE', 'FILECABINET'], counter: ['IFCFURNITURE', 'USERDEFINED'],
   };
   const pset = (target, name, props) => {
     const vals = Object.entries(props).filter(([, v]) => v != null).map(([k, v]) => {
@@ -165,17 +185,28 @@ export function writeIfc(build, { fileName = 'model.ifc', timestamp = new Date()
     }
     if (so.profile.length < 3 || so.z1 - so.z0 <= 1e-4) continue;
     const pl = place(stPl, so.z0);
-    const shape = extrude(so.profile, so.z1 - so.z0);
+    const shape = so.parts ? partsShape(so) : extrude(so.profile, so.z1 - so.z0);
+    if (!shape) continue;
     const g = ifcGuid();
     const nm = stepStr(so.name);
     const tag = stepStr(so.src);
     let e;
     if (so.type === 'door') {
-      e = add(`IFCDOOR('${g}',$,${nm},$,$,${pl},${shape},${tag},${real(so.props.heightM)},${real(so.props.widthM)},.DOOR.,.SINGLE_SWING_LEFT.,$)`);
+      const op = so.props.leaves === 2 ? '.DOUBLE_DOOR_SINGLE_SWING.' : '.SINGLE_SWING_LEFT.';
+      e = add(`IFCDOOR('${g}',$,${nm},$,$,${pl},${shape},${tag},${real(so.props.heightM)},${real(so.props.widthM)},.DOOR.,${op},$)`);
       pset(e, 'Pset_DoorCommon', { IsExternal: !!so.props.exterior });
     } else if (so.type === 'window') {
-      e = add(`IFCWINDOW('${g}',$,${nm},$,$,${pl},${shape},${tag},${real(so.props.heightM)},${real(so.props.widthM)},.WINDOW.,.SINGLE_PANEL.,$)`);
+      const pt = so.props.panels === 1 ? '.SINGLE_PANEL.' : so.props.panels === 2 ? '.DOUBLE_PANEL_VERTICAL.' : '.TRIPLE_PANEL_VERTICAL.';
+      e = add(`IFCWINDOW('${g}',$,${nm},$,$,${pl},${shape},${tag},${real(so.props.heightM)},${real(so.props.widthM)},.WINDOW.,${pt},$)`);
       pset(e, 'Pset_WindowCommon', { IsExternal: !!so.props.exterior });
+    } else if (so.type === 'curtain') {
+      e = add(`IFCCURTAINWALL('${g}',$,${nm},$,'Cam giydirme cephe',${pl},${shape},${tag},.NOTDEFINED.)`);
+      pset(e, 'Pset_CurtainWallCommon', { IsExternal: true });
+      pset(e, 'DWG2BIM', { UzunlukM: so.props.lengthM, YukseklikM: so.props.heightM });
+    } else if (so.type === 'fixture') {
+      const [ent, pdt] = FIXTURE_IFC[so.fx] || ['IFCFURNISHINGELEMENT', null];
+      e = add(`${ent}('${g}',$,${nm},$,${stepStr(so.props.kind)},${pl},${shape},${tag}${pdt ? `,.${pdt}.` : ''})`);
+      pset(e, 'DWG2BIM_Tefris', { Tur: so.props.kind, Blok: so.props.block || null, GenislikCm: so.props.widthCm, DerinlikCm: so.props.depthCm });
     } else if (so.type === 'space') {
       e = add(`IFCSPACE('${g}',$,${tag},$,$,${pl},${shape},${stepStr(so.name || so.src)},.ELEMENT.,.INTERNAL.,$)`);
       pset(e, 'Pset_SpaceCommon', { Reference: so.src });

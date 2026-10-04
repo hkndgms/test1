@@ -13,11 +13,10 @@ import { buildPrompt, parseAnswer } from './ai-prompt.js';
 import { readRvt } from './rvt.js';
 import { diagnose, SEV_LABEL } from './diagnose.js';
 import { planTour } from './tour.js';
+import { extractFixtures, FIXTURE_KINDS } from './fixtures.js';
+import { makeDemoDrawing, DEMO_ANSWER } from './demo.js';
 
 const $ = (id) => document.getElementById(id);
-const SAMPLE_DWG = 'samples/taziye-evi.dwg.b64.txt';
-const SAMPLE_RVT = 'samples/taziye-evi.rvt.b64.txt';
-const DEMO_AI = 'samples/demo-ai.json';
 
 const state = {
   drawing: null,
@@ -49,25 +48,18 @@ const state = {
   aiReport: null, // {report, issues}
   parts: [], // seçili pafta bölümleri (ada kimlikleri)
   partRegions: null,
+  fixtures: [], // tanınan tefriş (klozet, lavabo, klima...)
+  decorIgnored: 0,
 };
 
 // ------------------------------------------------------------ yardımcılar
-// Örnekler base64 metin olarak paketlenir (bkz. tools/pack-samples.mjs)
-async function fetchSample(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const bin = atob((await r.text()).trim());
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out.buffer;
-}
 function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function themeColors() {
   return {
     canvas: css('--canvas'), ink: css('--ink'), muted: css('--muted'), accent: css('--accent'),
     accentSoft: css('--accent-soft'), wall: css('--wall'), wallExt: css('--wall-ext'), wallEdge: css('--wall-edge'),
     column: css('--column'), win: css('--win'), door: css('--door'), empty: css('--empty'),
-    room: css('--room'), roomSel: css('--room-sel'), outline: css('--outline'),
+    room: css('--room'), roomSel: css('--room-sel'), outline: css('--outline'), fixture: css('--fixture'),
     fontUi: css('--font-ui'), fontMono: css('--font-mono'),
     dark: matchMedia('(prefers-color-scheme: dark)').matches ? document.documentElement.dataset.theme !== 'light' : document.documentElement.dataset.theme === 'dark',
   };
@@ -142,6 +134,7 @@ function loadBuffer(buf, name, { sample = false } = {}) {
   state.fileName = name;
   stopTour();
   $('demoBar').hidden = true;
+  $('welcome').hidden = true;
   $('fileChip').textContent = name;
   overlay('Okuyucu hazırlanıyor…');
   status('Dosya okunuyor…');
@@ -161,13 +154,18 @@ function loadBuffer(buf, name, { sample = false } = {}) {
   w.postMessage({ buf, isDxf }, [buf]);
 }
 
-async function loadSample() {
-  try {
-    overlay('Örnek proje indiriliyor (6 MB)…');
-    loadBuffer(await fetchSample(SAMPLE_DWG), 'ÖRNEK · 03.10.2026_TAZIYE_EVI_MEKANIK_PROJE.dwg', { sample: true });
-  } catch (e) {
-    overlay('Örnek dosya indirilemedi (' + e.message + '). Kendi DWG dosyanızı açabilirsiniz.', 'Örnek açılamadı');
-  }
+// Demo: program tarafından üretilen örnek bina (dışarıdan dosya indirilmez)
+function loadDemo() {
+  stopTour();
+  $('welcome').hidden = true;
+  state.isSample = true;
+  state.demoDone = false;
+  state.fileName = 'DEMO · Örnek ofis binası (program üretimi)';
+  $('fileChip').textContent = 'Demo binası';
+  $('demoBar').hidden = true;
+  const t0 = performance.now();
+  overlay('Demo binası hazırlanıyor…');
+  setTimeout(() => onDrawing(makeDemoDrawing(), ((performance.now() - t0) / 1000).toFixed(1)), 30);
 }
 
 function onDrawing(d, secs) {
@@ -203,23 +201,23 @@ function onDrawing(d, secs) {
 }
 
 // ------------------------------------------------------------ açılış demosu
-// Örnek proje + önceden hazırlanmış bir yapay zekâ cevabı + otomatik gezi
-async function runDemo() {
+// Örnek bina + hazır yapay zekâ cevabı; gezi yalnız düğmeyle başlar
+function runDemo() {
   state.demoDone = true;
   try {
-    const r = await fetch(DEMO_AI);
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    applyAnswer(await r.json());
-    aiStatus('Demo: önceden hazırlanmış yapay zekâ cevabı uygulandı.', 'ok');
+    applyAnswer(DEMO_ANSWER);
+    aiStatus('Demo: hazır yapay zekâ cevabı uygulandı.', 'ok');
   } catch (e) {
-    console.warn('demo cevabı yüklenemedi', e);
+    console.warn('demo cevabı uygulanamadı', e);
   }
   $('demoBar').hidden = false;
   showTab('3d');
-  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (!reduce) setTimeout(() => startTour(), 900);
 }
-$('demoClose').onclick = () => { $('demoBar').hidden = true; stopTour(); };
+$('demoClose').onclick = () => { $('demoBar').hidden = true; };
+$('btnDemo').onclick = loadDemo;
+$('welcomeDemo').onclick = loadDemo;
+$('welcomeClose').onclick = () => { $('welcome').hidden = true; };
+$('btnHelp').onclick = () => { $('welcome').hidden = false; };
 
 // ------------------------------------------------------------ analiz + yapay zekâ ekranı
 function openWizard() {
@@ -258,7 +256,7 @@ $('wizAnswer').addEventListener('paste', () => setTimeout(() => {
   setStatus($('wizStatus'), $('aiStatus').textContent, $('aiStatus').className.includes('err') ? 'err' : 'ok');
   $('wizSkipHint').textContent = 'Düzeltmeler uygulandı; modeli gösterebilirsiniz.';
 }, 0));
-$('wizShow3d').onclick = () => { closeWizard(); showTab('3d'); setTimeout(() => startTour(), 600); };
+$('wizShow3d').onclick = () => { closeWizard(); showTab('3d'); };
 $('wizShow2d').onclick = () => { closeWizard(); showTab('plan'); plan.fitModel(); };
 
 // ------------------------------------------------------------ otomatik gezi
@@ -321,7 +319,6 @@ fileInput.onchange = async () => {
   if (f) loadBuffer(await f.arrayBuffer(), f.name);
   fileInput.value = '';
 };
-$('btnSample').onclick = loadSample;
 const drop = $('drop');
 ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
@@ -539,7 +536,7 @@ for (const k of BUILD_CHK) $(k).onchange = () => { state.build[k] = $(k).checked
 $('btnDetect').onclick = () => runDetect();
 
 // ------------------------------------------------------------ algılama
-const emptyModel = () => ({ walls: [], columns: [], openings: [], rooms: [], outline: null, unitScale: UNIT_TO_CM[state.units] ?? 1, stats: {} });
+const emptyModel = () => ({ walls: [], columns: [], openings: [], rooms: [], curtains: [], outline: null, unitScale: UNIT_TO_CM[state.units] ?? 1, stats: {} });
 
 // İşlenecek alanlar: elle çizilen bölge > seçilen pafta bölümleri > otomatik bölge
 function currentRegions() {
@@ -555,9 +552,10 @@ function suffixIds(list, i, multi) {
 function mergeModels(models) {
   if (models.length === 1) return { ...models[0], outlines: models[0].outline ? [models[0].outline] : [] };
   const multi = models.length > 1;
-  const out = { walls: [], columns: [], openings: [], rooms: [], outlines: [], outline: null, unitScale: models[0].unitScale, stats: {} };
+  const out = { walls: [], columns: [], openings: [], rooms: [], curtains: [], outlines: [], outline: null, unitScale: models[0].unitScale, stats: {} };
   models.forEach((m, i) => {
     out.walls.push(...suffixIds(m.walls, i, multi));
+    out.curtains.push(...suffixIds(m.curtains || [], i, multi));
     out.columns.push(...suffixIds(m.columns, i, multi));
     out.openings.push(...suffixIds(m.openings, i, multi));
     out.rooms.push(...suffixIds(m.rooms, i, multi));
@@ -581,8 +579,9 @@ function runDetect() {
   state.overrides = {};
   state.selected = null;
   plan.setModel(state.model, state.overrides);
-  renderStats();
   runMep(false);
+  runFixtures();
+  renderStats();
   renderSel();
   rebuild3d(false);
   const hasAny = state.model.walls.length || mepCount() > 0;
@@ -593,6 +592,28 @@ function runDetect() {
   else status(`Algılandı (${ms} ms${regions.length > 1 ? `, ${regions.length} bölüm` : ''}). Plandaki öğelere tıklayarak düzenleyebilirsiniz.`, 'ok');
   renderParts();
 }
+
+// ------------------------------------------------------------ tefriş
+// Blok adlarından ve ıslak hacimlerdeki kümelerden; tesisat katmanları atlanır
+function runFixtures() {
+  const d = state.drawing;
+  if (!d || !state.model) { state.fixtures = []; return; }
+  const skip = new Set();
+  for (const [l, p] of state.mepProfiles) if (p.kind && p.kind !== 'ignore' && p.kind !== 'equipment') skip.add(l);
+  const regions = currentRegions();
+  const multi = regions.length > 1;
+  const all = [];
+  let ignored = 0;
+  regions.forEach((region, i) => {
+    const r = extractFixtures(d, { region, units: state.units, rooms: state.model.rooms, unitScale: state.model.unitScale, skipLayers: skip });
+    all.push(...suffixIds(r.fixtures, i, multi));
+    ignored += r.ignored;
+  });
+  state.fixtures = all;
+  state.decorIgnored = ignored;
+  plan.setFixtures(all);
+}
+const liveFixtures = () => state.fixtures.map((f) => { const o = state.overrides[f.id]; return o?.kind ? { ...f, kind: o.kind, label: FIXTURE_KINDS[o.kind]?.label || o.kind } : f; });
 
 // ------------------------------------------------------------ tesisat
 const mepCount = () => (state.mep ? state.mep.pipes.length + state.mep.ducts.length + state.mep.boxes.length : 0);
@@ -666,13 +687,17 @@ function renderStats() {
   if (m) {
     const area = live(m.rooms).reduce((s, r) => s + Math.abs(r.area), 0) * m.unitScale ** 2 / 1e4;
     const ext = walls.filter((w) => w.exterior).length;
-    $('resultNote').textContent = m.walls.length ? `${ext} dış, ${walls.length - ext} iç duvar · mahaller toplam ${area.toFixed(1)} m²` : 'Mimari bulunamadı (yalnız tesisat).';
+    const extra = [];
+    if (m.curtains?.length) extra.push(`${live(m.curtains).length} cam cephe şeridi`);
+    if (state.fixtures.length) extra.push(`${state.fixtures.filter((f) => !ov[f.id]?.deleted).length} tefriş`);
+    if (state.decorIgnored) extra.push(`${state.decorIgnored} süs çizimi yok sayıldı`);
+    $('resultNote').textContent = m.walls.length ? `${ext} dış, ${walls.length - ext} iç duvar · mahaller toplam ${area.toFixed(1)} m²${extra.length ? ' · ' + extra.join(' · ') : ''}` : 'Mimari bulunamadı (yalnız tesisat).';
   }
 }
 
 function buildAll() {
   return buildSolids(state.model, {
-    ...state.build, mep: state.mepVisible ? state.mep : null, mepProfiles: state.mepProfiles,
+    ...state.build, mep: state.mepVisible ? state.mep : null, mepProfiles: state.mepProfiles, fixtures: state.archVisible ? liveFixtures() : [],
     ceilingCm: state.ceiling.cm, layerNames: state.drawing.layers.map((l) => l.name),
   }, state.overrides);
 }
@@ -695,6 +720,7 @@ function select(id) {
 function setOv(id, patch) {
   state.overrides[id] = { ...(state.overrides[id] || {}), ...patch };
   plan.setModel(state.model, state.overrides);
+  if (id[0] === 'F') plan.setFixtures(liveFixtures());
   renderStats();
   renderTodo();
   rebuild3d();
@@ -717,11 +743,22 @@ function renderSelInner() {
   const box = $('selPanel');
   const me = findMepById(state.mep, state.selected);
   if (me) return renderMepSel(box, me);
-  const el = findById(state.model, state.selected);
+  const el = findById(state.model, state.selected) || state.fixtures.find((f) => f.id === state.selected);
   if (!el) { box.innerHTML = ''; return; }
   const id = el.id, ov = state.overrides[id] || {}, B = state.build;
   let html = '';
-  if (id[0] === 'O') {
+  if (id[0] === 'F') {
+    const kind = ov.kind || el.kind;
+    const opts = Object.entries(FIXTURE_KINDS).map(([k, v]) => `<option value="${k}" ${k === kind ? 'selected' : ''}>${esc(v.label)}</option>`).join('');
+    html = `<div class="row"><b>${esc(FIXTURE_KINDS[kind]?.label || kind)} ${id}</b><span class="hint">${Math.round(el.wCm)}×${Math.round(el.hCm)} cm · ${el.source === 'block' ? 'blok: ' + esc(el.name) : 'çizgi kümesi (' + esc(el.name) + ')'}</span></div>
+      <div class="field"><label for="selFx">Tür</label><select id="selFx">${opts}</select></div>
+      <div class="row"><button class="btn small" id="selDel">Öğeyi kaldır</button></div>`;
+  } else if (id[0] === 'G') {
+    html = `<div class="row"><b>Cam cephe ${id}</b><span class="hint">${(cm(el.length) / 100).toFixed(2)} m · ${cm(el.thickness)} cm doğrama</span></div>
+      <div class="grid2">${numField('selH', 'Yükseklik', ov.heightCm ?? B.wallHeightCm)}</div>
+      <p class="hint">Cam giydirme cephe / cam bölme: tam yükseklik cam, dikme ve kayıtlarla. IFC'de IfcCurtainWall.</p>
+      <div class="row"><button class="btn small" id="selDel">Cam cepheyi sil</button></div>`;
+  } else if (id[0] === 'O') {
     const kind = ov.kind || el.kind;
     html = `<div class="row"><b>Boşluk ${id}</b><span class="hint">${cm(el.width)} cm genişlik · ${cm(el.thickness)} cm duvar · ${el.exterior ? 'dış cephe' : 'iç'}</span></div>
       <div class="seg" role="group" aria-label="Boşluk türü">
@@ -756,6 +793,7 @@ function renderSelInner() {
   const h = $('selH'); if (h) h.onchange = () => setOv(id, { heightCm: parseFloat(h.value) });
   const s = $('selSill'); if (s) s.onchange = () => setOv(id, { sillCm: parseFloat(s.value) });
   const n = $('selName'); if (n) n.onchange = () => setOv(id, { name: n.value });
+  const fx = $('selFx'); if (fx) fx.onchange = () => { setOv(id, { kind: fx.value }); plan.setFixtures(liveFixtures()); };
   const del = $('selDel'); if (del) del.onclick = () => { setOv(id, { deleted: true }); select(null); };
 }
 
@@ -1030,6 +1068,7 @@ const capDownloads = window.claude?.use ? window.claude.use('downloads').catch((
 const capSample = window.claude?.use ? window.claude.use('sample').catch(() => null) : Promise.resolve(null);
 
 function baseName() {
+  if (!state.build.projectName && state.isSample) return 'DWG2BIM_demo';
   return (state.build.projectName || state.fileName.replace(/^ÖRNEK · /, '').replace(/\.(dwg|dxf)$/i, '') || 'model')
     .normalize('NFKD').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') || 'model';
 }
@@ -1064,10 +1103,11 @@ $('btnExportTop').onclick = exportIfc;
 // ------------------------------------------------------------ yapay zekâ asistanı
 const aiStatus = (m, k) => setStatus($('aiStatus'), m, k);
 function currentPrompt() {
+  // tefriş özeti komuta eklenir (fixtures)
   return buildPrompt({
     drawing: state.drawing, roles: state.roles, params: state.params, buildParams: state.build, model: state.model, fileName: state.fileName,
     mepStats: state.mepStats, mepProfiles: state.mepProfiles, elevations: state.elevations, ceiling: state.ceiling, islands: state.islands,
-    diagnostics: diagnose(state), mep: state.mep,
+    diagnostics: diagnose(state), mep: state.mep, fixtures: liveFixtures(),
   });
 }
 $('btnPrompt').onclick = () => {
@@ -1265,13 +1305,9 @@ async function inspectRvt(file) {
   }
 }
 $('rvtInput').onchange = () => { const f = $('rvtInput').files[0]; if (f) inspectRvt(f); $('rvtInput').value = ''; };
-$('btnRvtSample').onclick = async () => {
-  rvtStatus('Örnek RVT indiriliyor (11 MB)…');
-  try {
-    inspectRvt(new File([await fetchSample(SAMPLE_RVT)], 'taziye_evi_30092026.dwg.rvt'));
-  } catch (e) { rvtStatus('Örnek RVT indirilemedi: ' + e.message, 'err'); }
-};
 
 // ------------------------------------------------------------ başlangıç
 plan.resize();
-loadSample();
+// açılış: karşılama ekranı (demo düğmesi ile örnek bina)
+$('welcome').hidden = false;
+overlay(null);

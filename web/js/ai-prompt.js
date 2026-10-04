@@ -4,7 +4,7 @@
 import { UNIT_NAMES } from './detect.js';
 import { SYSTEMS, KINDS } from './kb.js';
 
-export function buildPrompt({ drawing, roles, params, buildParams, model, fileName, mepStats = [], mepProfiles = new Map(), elevations = null, ceiling = null, islands = [], diagnostics = [], mep = null }) {
+export function buildPrompt({ drawing, roles, params, buildParams, model, fileName, mepStats = [], mepProfiles = new Map(), elevations = null, ceiling = null, islands = [], diagnostics = [], mep = null, fixtures = [] }) {
   const layerRows = drawing.layers
     .map((l, i) => ({ i, ...l }))
     .filter((l) => l.count > 0)
@@ -113,6 +113,8 @@ ${texts.join(' | ') || '-'}
 ALGILAMA SONUCU
 Duvar: ${model?.walls.length ?? 0} adet, kalınlık dağılımı (cm: adet): ${Object.entries(th).map(([k, v]) => `${k}: ${v}`).join(', ') || '-'}
 Kolon: ${model?.columns.length ?? 0} adet
+Cam giydirme cephe / cam bölme: ${model?.curtains?.length ?? 0} şerit
+Tefriş (blok adından / ıslak hacim kümesinden tanınan): ${Object.entries(fixtures.reduce((a, f) => ((a[f.label] = (a[f.label] || 0) + 1), a), {})).map(([k, v]) => `${k} ${v}`).join(', ') || '-'}
 Boşluklar (id, genişlik cm, konum, şu anki tür):
 ${openingRows.join('\n') || '-'}
 Mahaller (id, alan, ad):

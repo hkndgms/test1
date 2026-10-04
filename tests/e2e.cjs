@@ -13,7 +13,21 @@ const { chromium } = require(process.env.PW || 'playwright');
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   const t0 = Date.now();
   await page.goto(url, { waitUntil: 'domcontentloaded' });
+  // karşılama ekranı -> demo binası
+  await page.waitForSelector('#welcome:not([hidden])', { timeout: 60000 });
+  console.log('welcome:', (await page.textContent('#welcome .card p')).slice(0, 80) + '…');
+  await page.click('#welcomeDemo');
   await page.waitForFunction(() => /lgılandı|bulunamadı|açılamadı/.test(document.getElementById('status').textContent), null, { timeout: 120000 });
+  console.log('demo bar:', await page.isVisible('#demoBar'), '| tour bar (otomatik açılmamalı):', await page.isVisible('#tourBar'), '| tab 3d:', await page.$eval('#tab3d', (b) => b.classList.contains('on')));
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: path.join(out, 'e2e-demo3d.png') });
+  // gezi düğmeyle
+  await page.click('#btnTour');
+  await page.waitForTimeout(1500);
+  console.log('tour after button:', await page.isVisible('#tourBar'), '|', (await page.textContent('#tourName')).slice(0, 40));
+  await page.screenshot({ path: path.join(out, 'e2e-demo-tour.png') });
+  await page.click('#tourStop');
+  await page.click('#tabPlan');
   console.log('status:', await page.textContent('#status'), `(${((Date.now() - t0) / 1000).toFixed(1)} s)`);
   console.log('stats:', await page.$$eval('.stat', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()).join(' | ')));
   console.log('note:', await page.textContent('#resultNote'));
@@ -90,13 +104,7 @@ const { chromium } = require(process.env.PW || 'playwright');
   const p = path.join(out, dl.suggestedFilename());
   await dl.saveAs(p);
   console.log('download:', p);
-  // RVT
   await page.click('#stabSum');
-  await page.click('#stepRvt summary');
-  await page.click('#btnRvtSample');
-  await page.waitForFunction(() => /Okundu|okunamadı|indirilemedi/.test(document.getElementById('rvtStatus').textContent), null, { timeout: 60000 });
-  console.log('rvt:', await page.textContent('#rvtStatus'));
-  console.log('rvt facts:', (await page.textContent('#rvtOut')).replace(/\s+/g, ' ').slice(0, 400));
   await page.screenshot({ path: path.join(out, 'e2e-panel.png'), fullPage: false });
   console.log('console errors/warnings:', errors.length ? '\n  ' + errors.slice(0, 15).join('\n  ') : 'none');
   await browser.close();
