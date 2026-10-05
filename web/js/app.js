@@ -1468,6 +1468,25 @@ Benzer boyutlu bölümler: ${isl._similar.join(', ') || '-'}`;
     processParts(state.parts);
     return res.join('\n') + '\n(bölüm ' + base + ' yeniden işleniyor; listeleri tekrar oku. Tesisat/tavan/tefriş çizimi artık plana bindirildi.)';
   },
+  // birleşik okuma aracı
+  list: (what, { filter = '', kind = '', layer = '', clear = false } = {}) => {
+    switch (what) {
+      case 'layers': return agentApi.listLayers(filter);
+      case 'openings': return agentApi.listOpenings(kind);
+      case 'rooms': return agentApi.listRooms();
+      case 'walls': return agentApi.listWalls();
+      case 'fixtures': return agentApi.listFixtures();
+      case 'mep': return agentApi.listMep();
+      case 'texts': return agentApi.listTexts(filter, layer);
+      case 'blocks': return agentApi.listBlocks(filter);
+      case 'marks': return agentApi.marks(clear);
+      case 'sketches': return agentApi.listSketches();
+      case 'parts': return agentApi.setParts(null);
+      case 'library': return agentApi.library('', filter);
+      case 'notes': case 'diagnostics': case 'unknown': return agentApi.diagnostics() + '\n\n' + agentApi.listUnknown();
+      default: throw new Error('what: layers | openings | rooms | walls | fixtures | mep | texts | blocks | marks | sketches | parts | library | notes');
+    }
+  },
   exportIfc: async () => { await exportIfc(); return $('status').textContent || 'IFC hazırlandı'; },
   marks: (clear) => {
     if (clear) { state.marks = []; plan.marks = []; plan.draw(); renderMarkHint(); return 'işaretler temizlendi'; }
@@ -1757,9 +1776,12 @@ const agentUi = (() => {
     const lim = await sm.limits().catch(() => null);
     if (!lim?.tools) return disable();
     sample = sm;
-    tools = wrapTools(makeTools(agentApi)).slice(0, lim.tools.maxCount || 20);
+    const all = wrapTools(makeTools(agentApi));
+    const cap = lim.tools.maxCount || all.length;
+    tools = all.slice(0, cap);
+    if (tools.length < all.length) console.warn(`araç sınırı ${cap}: ${all.slice(cap).map((t) => t.name).join(', ')} sunulamıyor`);
     $('agentUnavail').hidden = true; $('agentIntro').hidden = false;
-    $('agentTier').textContent = 'Claude · aboneliğinizle, anahtarsız';
+    $('agentTier').textContent = `Claude · aboneliğinizle, anahtarsız · ${tools.length}${tools.length < all.length ? '/' + all.length : ''} araç`;
     setBusy(false);
     // analiz ekranı: uçtan uca inceleme, sonra 3B
     const w = $('wizClaude');

@@ -27,45 +27,45 @@ const { chromium } = require(process.env.PW || 'playwright');
       let text;
       if (/uçtan uca|GÖREV:/i.test(last)) {
         const ov = await call('get_overview');
-        const ops = await call('list_openings', { kind: 'empty' });
-        const rooms = await call('list_rooms');
+        const ops = await call('list', { what: 'openings', kind: 'empty' });
+        const rooms = await call('list', { what: 'rooms' });
         const firstRoom = String(rooms).split('\n')[1]?.split('\t')[0];
-        const firstOpening = String(await call('list_openings')).split('\n')[1]?.split('\t')[0];
+        const firstOpening = String(await call('list', { what: 'openings' })).split('\n')[1]?.split('\t')[0];
         const changes = { params: { wallHeightCm: 330 }, ceilingCm: 300, ceilingReason: 'test', report: 'Taklit inceleme raporu.', issues: [{ severity: 'low', title: 'Test', detail: 'taklit', fixed: true }] };
         if (firstRoom) changes.rooms = { [firstRoom]: { name: 'Test Mahal' } };
         if (firstOpening) changes.openings = { [firstOpening]: { kind: 'door' } };
         const applied = await call('apply', { changes });
         text = `İnceleme bitti. Özet ${String(ov).length} karakter, boş geçiş listesi ${String(ops).split('\n').length - 1} satır.\nUygulandı: ${applied}\n[${log.join(', ')}]`;
       } else if (/masa|sandalye|tefriş ekle/i.test(last)) {
-        const rooms = String(await call('list_rooms')).split('\n').slice(1);
+        const rooms = String(await call('list', { what: 'rooms' })).split('\n').slice(1);
         const big = rooms.map((r) => r.split('\t')).sort((a, b) => parseFloat(b[1]) - parseFloat(a[1]))[0];
         const r = await call('add_fixtures', { kind: 'table_set', room: big[0], count: 4 });
         const r2 = await call('add_fixtures', { kind: 'ac', room: big[0], count: 1, layout: 'perimeter' });
         text = `${r} / ${r2} [${log.join(', ')}]`;
       } else if (/kapı aç|kapı ekle/i.test(last)) {
-        const walls = String(await call('list_walls')).split('\n').slice(2).map((r) => r.split('\t')).filter((r) => r[1] === 'duvar' && r[4] === 'iç' && parseFloat(r[3]) > 3);
+        const walls = String(await call('list', { what: 'walls' })).split('\n').slice(2).map((r) => r.split('\t')).filter((r) => r[1] === 'duvar' && r[4] === 'iç' && parseFloat(r[3]) > 3);
         const r = await call('add_structure', { type: 'door', wall: walls[0][0], widthCm: 100 });
         const c = await call('add_structure', { type: 'column', at: [300, 300], sizeCm: [40, 40] });
         text = `${r} / ${c} [${log.join(', ')}]`;
       } else if (/kütüphane|tabure/i.test(last)) {
-        const u = await call('review_notes');
+        const u = await call('list', { what: 'notes' });
         const a = await call('library', { action: 'add', name: 'bar_tabure', label: 'Bar taburesi', kind: 'chair', sizeCm: [38, 38], aliases: ['TABURE|STOOL'], parts: [{ x: 0, y: 0, w: 36, d: 36, z0: 70, z1: 76, mat: 'fabric', shape: 'oval' }, { x: 0, y: 14, w: 4, d: 4, z0: 0, z1: 70, mat: 'chrome' }, { x: 0, y: 0, w: 36, d: 36, z0: 0, z1: 2, mat: 'chrome', shape: 'oval' }] });
-        const rooms = String(await call('list_rooms')).split('\n').slice(1).map((r) => r.split('\t'));
+        const rooms = String(await call('list', { what: 'rooms' })).split('\n').slice(1).map((r) => r.split('\t'));
         const mut = rooms.find((r) => /MUTFAK/.test(r[2])) || rooms[0];
         const r = await call('add_fixtures', { kind: 'bar_tabure', room: mut[0], count: 3, layout: 'row' });
-        const l = await call('library', { action: 'list' });
+        const l = await call('list', { what: 'library' });
         text = `${String(u).split('\n')[0]} / ${a} / ${r} / kütüphane ${String(l).split('\n').length - 1} satır [${log.join(', ')}]`;
       } else if (/kapıyı taşı|duvarı sil/i.test(last)) {
-        const ops = String(await call('list_openings', { kind: 'door' })).split('\n').slice(1).map((r) => r.split('\t')).filter((r) => r[3] === 'iç');
+        const ops = String(await call('list', { what: 'openings', kind: 'door' })).split('\n').slice(1).map((r) => r.split('\t')).filter((r) => r[3] === 'iç');
         const e = await call('edit', { id: ops[0][0], shiftCm: 60 });
-        const walls = String(await call('list_walls')).split('\n').slice(2).map((r) => r.split('\t')).filter((r) => r[1] === 'duvar' && r[4] === 'iç');
+        const walls = String(await call('list', { what: 'walls' })).split('\n').slice(2).map((r) => r.split('\t')).filter((r) => r[1] === 'duvar' && r[4] === 'iç');
         const w = await call('edit', { id: walls[walls.length - 1][0], delete: true });
         text = `${e} / ${w} [${log.join(', ')}]`;
       } else if (/yerden ısıtma|çiz/i.test(last)) {
-        const mk = await call('list_drawing', { what: 'marks' });
-        const rooms = String(await call('list_rooms')).split('\n').slice(1).map((r) => r.split('\t'));
+        const mk = await call('list', { what: 'marks' });
+        const rooms = String(await call('list', { what: 'rooms' })).split('\n').slice(1).map((r) => r.split('\t'));
         const of = rooms.find((r) => /OFİS 1/.test(r[2])) || rooms[0];
-        const lib = await call('library', { action: 'list', filter: 'ısıtma' });
+        const lib = await call('list', { what: 'library', filter: 'ısıtma' });
         const n = await call('library', { action: 'add', name: 'yerden_isitma_std', kind: 'recipe', label: 'Yerden ısıtma standardı', text: 'PE-X 16 mm, aralık 15 cm, kenar payı 25 cm, kolektörden başla', tags: ['ısıtma', 'serpantin'], params: { pitchCm: 15, marginCm: 25 } });
         const d = await call('draw', { pattern: 'serpentine', room: of[0], pitchCm: 15, marginCm: 25, layer: 'M-YERDEN ISITMA', system: 'heating' });
         const e = await call('draw', { entities: [{ type: 'circle', center: [100, 100], r: 20 }, { type: 'text', at: [120, 100], text: 'KOLEKTÖR', h: 12 }], layer: 'M-YERDEN ISITMA' });
@@ -75,14 +75,14 @@ const { chromium } = require(process.env.PW || 'playwright');
         const r = await call('show', { view: '3d' });
         text = `3B görünüme geçtim (${r}). [${log.join(', ')}]`;
       } else {
-        const r = await call('list_mep');
+        const r = await call('list', { what: 'mep' });
         text = `Tesisat özeti ilk satır: ${String(r).split('\n')[0]} [${log.join(', ')}]`;
       }
       if (opts.onText) opts.onText({ text, delta: text });
       return { text, truncated: false, modelTierApplied: opts.modelTier || 'default' };
     };
     sample.json = async () => ({});
-    sample.limits = async () => ({ maxPromptBytes: 262144, tools: { maxCount: 20 } });
+    sample.limits = async () => ({ maxPromptBytes: 262144, tools: { maxCount: 16 } });
     // 19 araç 20 sınırının altında kalmalı
     window.claude = { use: async (name) => (name === 'sample' ? sample : null) };
   });
