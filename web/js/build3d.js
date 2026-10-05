@@ -103,16 +103,14 @@ export function buildSolids(model, params, overrides = {}) {
       const parts = [
         at(-W / 2 + j / 2, 0, j, fd, 0, dh, 'frame'), at(W / 2 - j / 2, 0, j, fd, 0, dh, 'frame'), at(0, 0, W, fd, dh - j, dh, 'frame'),
       ];
-      // kanat(lar) 90° açık: menteşe kasada, kanat duvara dik, binanın içine doğru
+      // kanat(lar) kapalı: duvar düzleminde, kasanın içinde; kol serbest uca yakın iki yüzden çıkar
       const leaves = W >= 1.4 ? 2 : 1;
       const lw = (W - 2 * j - (leaves - 1) * 0.01) / leaves;
-      const dir = ((bc[0] - cx) * ac[0] + (bc[1] - cy) * ac[1]) >= 0 ? 1 : -1;
       for (let i = 0; i < leaves; i++) {
-        const hingeU = leaves === 1 || i === 0 ? -W / 2 + j : W / 2 - j; // sol kasa; çift kanatta ikinci sağ kasa
-        const sgn = hingeU < 0 ? 1 : -1;
-        parts.push(at(hingeU + sgn * 0.02, dir * (fd / 2 + lw / 2), 0.04, lw, 0.01, dh - j, 'leaf'));
-        // kol: kanadın serbest ucuna yakın, 1 m yükseklikte, iki yüzden çıkar
-        parts.push(at(hingeU + sgn * 0.02, dir * (fd / 2 + lw - 0.08), 0.04 + 0.1, 0.12, 0.98, 1.01, 'chrome'));
+        const u = -W / 2 + j + lw / 2 + i * (lw + 0.01);
+        parts.push(at(u, 0, lw, 0.045, 0.01, dh - j, 'leaf'));
+        const hu = leaves === 1 ? W / 2 - j - 0.08 : (i === 0 ? u + lw / 2 - 0.08 : u - lw / 2 + 0.08);
+        parts.push(at(hu, 0, 0.12, 0.045 + 0.1, 0.98, 1.01, 'chrome'));
       }
       out.push({ type: 'door', id: op.id, src: op.id, name: `Kapı ${widthCm}`, profile: rect, z0: 0, z1: dh, parts, props: { widthM: widthCm / 100, heightM: dh, exterior: op.exterior, leaves } });
       if (top - dh > 0.01) out.push({ type: 'lintel', id: op.id + '-L', src: op.id, name: `Lento ${op.id}`, profile: rect, z0: dh, z1: top, props: {} });
@@ -160,7 +158,7 @@ export function buildSolids(model, params, overrides = {}) {
     const o = ov(f.id);
     if (o.deleted) continue;
     const poly = ccw(f.poly.map(tr));
-    const fr = fixtureFrame(poly, wallPolysM);
+    const fr = f.facing != null ? facingFrame(poly, f.facing) : fixtureFrame(poly, wallPolysM);
     const parts = f.libParts ? libraryParts(f.libParts, fr) : fixtureParts(f.kind, fr, { H, ceilM });
     if (!parts) continue;
     const z1 = Math.max(...parts.map((p) => p.z1)), z0 = Math.min(...parts.map((p) => p.z0));
@@ -257,6 +255,18 @@ function libraryParts(defs, fr) {
     else P.push({ profile: [world(x - w / 2, y), world(x + w / 2, y), world(x + w / 2, y + d), world(x - w / 2, y + d)], z0: p.z0 / 100, z1: p.z1 / 100, mat: p.mat });
   }
   return P.length ? P : null;
+}
+
+// Yönü verilmiş öğe (sohbetle yerleştirilen): facing = ön yüzün baktığı açı (rad); arka kenar ters taraftadır
+function facingFrame(poly, facing) {
+  const v = [Math.cos(facing), Math.sin(facing)], u = [v[1], -v[0]]; // u: arka kenar boyunca (sağa)
+  let cx = 0, cy = 0;
+  for (const p of poly) { cx += p[0]; cy += p[1]; }
+  cx /= poly.length; cy /= poly.length;
+  let lo = Infinity, hi = -Infinity, lo2 = Infinity, hi2 = -Infinity;
+  for (const p of poly) { const a = (p[0] - cx) * u[0] + (p[1] - cy) * u[1], b = (p[0] - cx) * v[0] + (p[1] - cy) * v[1]; lo = Math.min(lo, a); hi = Math.max(hi, a); lo2 = Math.min(lo2, b); hi2 = Math.max(hi2, b); }
+  const W = hi - lo || 0.01, D = hi2 - lo2 || 0.01;
+  return { back: [cx + v[0] * lo2, cy + v[1] * lo2], u, v, W, D, nearWall: false };
 }
 
 // Parça üreticileri: yerel koordinat (x: arka kenar boyunca, merkez 0; y: arkadan öne 0..D)
@@ -356,6 +366,18 @@ function fixtureParts(kind, fr, { H, ceilM }) {
     case 'counter':
       box(0, 0, w, d, 0, 0.88, 'wood'); box(0, -0.01, w + 0.02, d + 0.02, 0.88, 0.92, 'metal');
       break;
+    case 'stair': {
+      // basamaklar uzun eksen boyunca yükselir (arka = alt basamak); rıht 17 cm, kat yüksekliğine kadar
+      const rise = 0.17, run = Math.max(0.25, Math.min(0.32, d / Math.max(1, Math.round(H / rise))));
+      const n = Math.max(2, Math.min(Math.round(H / rise), Math.floor(d / run)));
+      for (let i = 0; i < n; i++) box(0, i * run, w, d - i * run, 0, Math.min(H, (i + 1) * rise), 'metal');
+      box(-w / 2 + 0.02, 0, 0.04, d, 0, Math.min(H, n * rise) + 0.9, 'frame'); box(w / 2 - 0.02, 0, 0.04, d, 0, Math.min(H, n * rise) + 0.9, 'frame'); // korkuluk dikmeleri (basit)
+      break;
+    }
+    case 'outlet': box(0, 0, 0.08, Math.min(d, 0.05), 0.38, 0.46, 'metal'); break;
+    case 'switch': box(0, 0, 0.08, Math.min(d, 0.05), 1.08, 1.16, 'metal'); break;
+    case 'light': { const z1 = Math.min(ceilM, H); rbox(0, 0, w, d, z1 - 0.04, z1, 'metal', 0.02); rbox(0, 0.005, w - 0.01, d - 0.01, z1 - 0.045, z1 - 0.04, 'water', 0.02); break; }
+    case 'panel': box(0, 0, w, Math.max(Math.min(d, 0.25), 0.12), 1.2, 1.2 + Math.max(0.6, Math.min(1.2, w)), 'metal'); break;
     default:
       return null;
   }

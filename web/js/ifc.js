@@ -110,6 +110,8 @@ export function writeIfc(build, { fileName = 'model.ifc', timestamp = new Date()
     ac: ['IFCUNITARYEQUIPMENT', 'SPLITSYSTEM'], radiator: ['IFCSPACEHEATER', 'RADIATOR'],
     table: ['IFCFURNITURE', 'TABLE'], desk: ['IFCFURNITURE', 'DESK'], chair: ['IFCFURNITURE', 'CHAIR'], sofa: ['IFCFURNITURE', 'SOFA'],
     bed: ['IFCFURNITURE', 'BED'], cabinet: ['IFCFURNITURE', 'FILECABINET'], counter: ['IFCFURNITURE', 'USERDEFINED'],
+    stair: ['IFCSTAIR', 'STRAIGHT_RUN_STAIR'], outlet: ['IFCOUTLET', 'POWEROUTLET'], switch: ['IFCSWITCHINGDEVICE', 'TOGGLESWITCH'],
+    light: ['IFCLIGHTFIXTURE', 'POINTSOURCE'], panel: ['IFCELECTRICDISTRIBUTIONBOARD', 'DISTRIBUTIONBOARD'],
   };
   const pset = (target, name, props) => {
     const vals = Object.entries(props).filter(([, v]) => v != null).map(([k, v]) => {
@@ -161,7 +163,9 @@ export function writeIfc(build, { fileName = 'model.ifc', timestamp = new Date()
         const shape = pipeShape(so.path, so.r);
         if (!shape) continue;
         const pl = place(stPl, 0);
-        e = add(`${air ? 'IFCDUCTSEGMENT' : 'IFCPIPESEGMENT'}('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},${air ? '.FLEXIBLESEGMENT.' : '.RIGIDSEGMENT.'})`);
+        const elec = so.system === 'electrical' || so.system === 'lowvoltage' || so.system === 'lighting';
+        e = elec ? add(`IFCCABLECARRIERSEGMENT('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.CONDUITSEGMENT.)`)
+          : add(`${air ? 'IFCDUCTSEGMENT' : 'IFCPIPESEGMENT'}('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},${air ? '.FLEXIBLESEGMENT.' : '.RIGIDSEGMENT.'})`);
       } else {
         if (so.profile.length < 3 || so.z1 - so.z0 <= 1e-4) continue;
         const pl = place(stPl, so.z0);
@@ -169,6 +173,10 @@ export function writeIfc(build, { fileName = 'model.ifc', timestamp = new Date()
         if (so.type === 'duct') e = add(`IFCDUCTSEGMENT('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.RIGIDSEGMENT.)`);
         else if (so.type === 'airterminal') e = add(`IFCAIRTERMINAL('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.DIFFUSER.)`);
         else if (so.system === 'fire' && so.type === 'terminal') e = add(`IFCFIRESUPPRESSIONTERMINAL('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.SPRINKLER.)`);
+        else if (so.system === 'lighting') e = add(`IFCLIGHTFIXTURE('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.POINTSOURCE.)`);
+        else if (so.system === 'electrical' && so.type === 'terminal') e = add(`IFCOUTLET('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.POWEROUTLET.)`);
+        else if (so.system === 'electrical' && so.type === 'equipment') e = add(`IFCELECTRICDISTRIBUTIONBOARD('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.DISTRIBUTIONBOARD.)`);
+        else if (so.system === 'lowvoltage' && so.type === 'terminal') e = add(`IFCSENSOR('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.NOTDEFINED.)`);
         else if (so.type === 'terminal') e = add(`IFCVALVE('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.NOTDEFINED.)`);
         else if (so.system === 'hvac') e = add(`IFCUNITARYEQUIPMENT('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag},.SPLITSYSTEM.)`);
         else e = add(`IFCFLOWTERMINAL('${g}',$,${nm},$,${stepStr(sys.label)},${pl},${shape},${tag})`);

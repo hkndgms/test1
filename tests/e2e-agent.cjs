@@ -36,6 +36,12 @@ const { chromium } = require(process.env.PW || 'playwright');
         if (firstOpening) changes.openings = { [firstOpening]: { kind: 'door' } };
         const applied = await call('apply', { changes });
         text = `İnceleme bitti. Özet ${String(ov).length} karakter, boş geçiş listesi ${String(ops).split('\n').length - 1} satır.\nUygulandı: ${applied}\n[${log.join(', ')}]`;
+      } else if (/sıra sıra|sandalyeyle doldur/i.test(last)) {
+        const rooms = String(await call('list', { what: 'rooms' })).split('\n').slice(1).map((r) => r.split('\t'));
+        const top = rooms.find((r) => /TEKNİK/.test(r[2])) || rooms[0];
+        const rd = await call('list', { what: 'room', id: top[0] });
+        const r = await call('add_fixtures', { kind: 'chair', room: top[0], layout: 'rows', facingDeg: 90, aisleCm: 100, count: 0 });
+        text = `${String(rd).split('\n')[0]} / ${r} [${log.join(', ')}]`;
       } else if (/masa|sandalye|tefriş ekle/i.test(last)) {
         const rooms = String(await call('list', { what: 'rooms' })).split('\n').slice(1);
         const big = rooms.map((r) => r.split('\t')).sort((a, b) => parseFloat(b[1]) - parseFloat(a[1]))[0];
@@ -116,7 +122,7 @@ const { chromium } = require(process.env.PW || 'playwright');
   await page.evaluate(() => window.dwg2bim.api && window.dwg2bim.state.marks.length === 0 && (window.__mark = true));
   const dlAll = [];
   page.on('download', (d) => dlAll.push(d));
-  for (const msg of ['Giriş holüne masa sandalye koy', 'Koridora bir kapı aç', 'Kütüphaneye bar taburesi ekle ve mutfağa koy', 'İlk iç kapıyı taşı ve son iç duvarı sil', 'Ofis 1 e yerden ısıtma çiz ve dxf indir']) {
+  for (const msg of ['Giriş holüne masa sandalye koy', 'Koridora bir kapı aç', 'Kütüphaneye bar taburesi ekle ve mutfağa koy', 'İlk iç kapıyı taşı ve son iç duvarı sil', 'Ofis 1 e yerden ısıtma çiz ve dxf indir', 'Teknik odayı sıra sıra sandalyeyle doldur, hepsi kuzeye baksın']) {
     const n = await page.$$eval('#chatLog .msg.user', (l) => l.length);
     await page.fill('#chatIn', msg); await page.press('#chatIn', 'Enter');
     await idle(n);

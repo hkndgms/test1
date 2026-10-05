@@ -867,6 +867,24 @@ function select(id) {
   plan.setSelected(id);
   state.view3d?.setSelected(id);
   renderSel();
+  renderFocus();
+}
+// Seçili öğe sohbete bağlam olarak gider ("[Seçili: R4 ...]"); mahal seçiliyse istek o mahal içindir
+function focusLabel() {
+  const id = state.selected;
+  if (!id || !state.model) return '';
+  const el = findById(state.model, id) || state.fixtures.find((f) => f.id === id);
+  if (!el) return '';
+  if (id[0] === 'R') return `${id} ${state.overrides[id]?.name ?? el.name ?? ''}`.trim();
+  if (id[0] === 'O') return `${id} ${effKind(el)} ${cm(el.width)} cm`;
+  if (id[0] === 'F') return `${id} ${el.label || el.kind}`;
+  return id;
+}
+function renderFocus() {
+  const el = $('markHint');
+  const f = focusLabel();
+  const marks = state.marks.length ? state.marks.map((m) => m.id).join(', ') : '';
+  el.textContent = [f ? 'Seçili: ' + f + ' (istekler bu öğe için; × ile bırak)' : '', marks ? 'İşaretler: ' + marks : ''].filter(Boolean).join(' · ');
 }
 
 function setOv(id, patch) {
@@ -1416,10 +1434,18 @@ const agentApi = {
     return `kaldırıldı: ${ok.join(', ') || '-'}${bad.length ? '; bulunamadı: ' + bad.join(', ') : ''}`;
   },
   setFixture: (id, kind) => {
-    if (!state.fixtures.some((f) => f.id === id)) throw new Error(id + ' bulunamadı');
+    const f = state.fixtures.find((f) => f.id === id);
+    if (!f) throw new Error(id + ' bulunamadı');
     if (!FIXTURE_KINDS[kind]) throw new Error('bilinmeyen tür: ' + kind);
     setOv(id, { kind }); plan.setFixtures(liveFixtures());
-    return `${id} → ${FIXTURE_KINDS[kind].label}`;
+    // otomatik öğrenme: blok adı biliniyorsa kütüphaneye takma ad olarak yaz (sonraki projelerde tanınır)
+    let learned = '';
+    if (f.source === 'block' && f.name) {
+      const esc = fold(f.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rec = state.lib.add({ name: f.name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '_').slice(0, 40), label: FIXTURE_KINDS[kind].label + ' (' + f.name + ')', kind, sizeCm: [Math.round(f.wCm), Math.round(f.hCm)], aliases: ['^' + esc + '$'], note: 'otomatik: ' + state.fileName }, 'auto');
+      if (rec) learned = `; kütüphaneye öğrenildi (${rec.name})`;
+    }
+    return `${id} → ${FIXTURE_KINDS[kind].label}${learned}`;
   },
   addWall: (x1, y1, x2, y2, tCm) => {
     if (![x1, y1, x2, y2].every(Number.isFinite)) throw new Error('koordinatlar sayı olmalı');
@@ -1469,8 +1495,32 @@ Benzer boyutlu bölümler: ${isl._similar.join(', ') || '-'}`;
     return res.join('\n') + '\n(bölüm ' + base + ' yeniden işleniyor; listeleri tekrar oku. Tesisat/tavan/tefriş çizimi artık plana bindirildi.)';
   },
   // birleşik okuma aracı
-  list: (what, { filter = '', kind = '', layer = '', clear = false } = {}) => {
+  // mahal dökümü: sınırındaki boşluklar, içindeki tefriş (tahminler dahil), tesisat, yazılar, komşular
+  room: (id) => {
+    const m = state.model, s = m.unitScale;
+    const r = m.rooms.find((x) => x.id === String(id)) || m.rooms.find((x) => (state.overrides[x.id]?.name ?? x.name ?? '').toLocaleLowerCase('tr') === String(id).toLocaleLowerCase('tr'));
+    if (!r) throw new Error('mahal bulunamadı: ' + id);
+    const near = (p, d) => { let best = Infinity; for (let i = 0; i < r.poly.length; i++) { const a = r.poly[i], b = r.poly[(i + 1) % r.poly.length]; const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1; const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2)); best = Math.min(best, Math.hypot(a[0] + dx * t - p[0], a[1] + dy * t - p[1])); } return best <= d; };
+    const ops = m.openings.filter((o) => !state.overrides[o.id]?.deleted && near(o.center, o.thickness + 20 / s));
+    const other = (o) => { const [cx, cy] = o.center; const cands = m.rooms.filter((q) => q !== r && !state.overrides[q.id]?.deleted && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => pointInPoly(cx + dx * o.thickness * 1.5 + dx * 15 / s, cy + dy * o.thickness * 1.5 + dy * 15 / s, q.poly))); return cands[0] ? `${cands[0].id} ${state.overrides[cands[0].id]?.name ?? cands[0].name ?? ''}` : (o.exterior ? 'dış' : '?'); };
+    const fx = liveFixtures().filter((f) => !state.overrides[f.id]?.deleted && pointInPoly(f.center[0], f.center[1], r.poly));
+    const mepIn = state.mep ? state.mep.boxes.filter((b) => { let cx = 0, cy = 0; for (const p of b.poly) { cx += p[0]; cy += p[1]; } return pointInPoly(cx / b.poly.length, cy / b.poly.length, r.poly); }) : [];
+    const pipesIn = state.mep ? state.mep.pipes.filter((p) => p.pts.some((q) => pointInPoly(q[0], q[1], r.poly))) : [];
+    const texts = state.drawing.texts.filter((t) => pointInPoly(t.x, t.y, r.poly)).map((t) => t.s.trim()).filter((x) => x).slice(0, 40);
+    const unknownIn = state.unknownBlocks.filter((u) => u.center && pointInPoly(u.center[0], u.center[1], r.poly));
+    const area = Math.abs(r.area) * s * s / 1e4;
+    let bb = [Infinity, Infinity, -Infinity, -Infinity]; for (const p of r.poly) { bb = [Math.min(bb[0], p[0]), Math.min(bb[1], p[1]), Math.max(bb[2], p[0]), Math.max(bb[3], p[1])]; }
+    return `MAHAL ${r.id}: ${state.overrides[r.id]?.name ?? r.name ?? '(adsız)'} · ${area.toFixed(1)} m² · kutu [${bb.map((v) => v.toFixed(0)).join(', ')}] (${((bb[2] - bb[0]) * s / 100).toFixed(1)}×${((bb[3] - bb[1]) * s / 100).toFixed(1)} m)
+SINIRDAKİ BOŞLUKLAR (id, tür, genişlik, komşu, gerekçe):\n${ops.map((o) => `${o.id}\t${effKind(o)}\t${cm(o.width)} cm\t→ ${other(o)}\t${o.why || ''}`).join('\n') || '(hiç boşluk yok — kapısız mahal!)'}
+Kapı sayısı: ${ops.filter((o) => effKind(o) === 'door').length}, pencere: ${ops.filter((o) => effKind(o) === 'window').length}, geçiş: ${ops.filter((o) => effKind(o) === 'empty').length}
+TEFRİŞ (id, tür, ölçü, kaynak, konum):\n${fx.map((f) => `${f.id}\t${f.kind} (${f.label})${f.guess ? ' [TAHMİN — doğrula]' : ''}\t${Math.round(f.wCm)}×${Math.round(f.hCm)} cm\t${f.source === 'block' ? 'blok: ' + f.name : f.source === 'manual' ? 'sohbetle' : 'küme: ' + f.name}\t(${f.center.map((v) => v.toFixed(0)).join(', ')})`).join('\n') || '(tefriş yok)'}
+TESİSAT: ${mepIn.length} cihaz/uç birim (${[...new Set(mepIn.map((b) => (state.mepProfiles.get(b.l)?.system) || '?'))].join(', ') || '-'}), ${pipesIn.length} boru/hat
+YAZILAR: ${texts.join(' | ') || '-'}
+${unknownIn.length ? 'TANINMAYAN BLOKLAR: ' + unknownIn.map((u) => `${u.name} (${Math.round(u.wCm)}×${Math.round(u.hCm)} cm)`).join(', ') : ''}`;
+  },
+  list: (what, { id = '', filter = '', kind = '', layer = '', clear = false } = {}) => {
     switch (what) {
+      case 'room': return agentApi.room(id);
       case 'layers': return agentApi.listLayers(filter);
       case 'openings': return agentApi.listOpenings(kind);
       case 'rooms': return agentApi.listRooms();
@@ -1642,7 +1692,7 @@ Benzer boyutlu bölümler: ${isl._similar.join(', ') || '-'}`;
     runDetect();
     return 'proje baştan algılandı; tüm düzenlemeler geri alındı';
   },
-  addFixtures: ({ kind, room, count, layout, sizeCm, spacingCm, rotDeg, at }) => {
+  addFixtures: ({ kind, room, count, layout, sizeCm, spacingCm, rotDeg, facingDeg, aisleCm, at }) => {
     const m = state.model, k = 1 / m.unitScale;
     kind = String(kind || '').toLowerCase();
     const li = state.lib.get(kind);
@@ -1653,15 +1703,15 @@ Benzer boyutlu bölümler: ${isl._similar.join(', ') || '-'}`;
     let res;
     if (typeof at === 'string' && /^M\d+$/.test(at)) at = agentApi._point(at);
     if (!at && room && /^M\d+$/.test(String(room))) { const m = state.marks.find((m) => m.id === room); if (m?.type === 'point') at = [m.x, m.y]; else if (m) { const c = agentApi._point(room); const r = roomAt(c[0], c[1]); if (r) room = r.id; } }
-    if (Array.isArray(at) && at.length === 2) res = fixtureAt({ kind, x: +at[0], y: +at[1], sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, rotDeg: +rotDeg || 0, k, lib: state.lib });
+    if (Array.isArray(at) && at.length === 2) res = fixtureAt({ kind, x: +at[0], y: +at[1], sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, rotDeg: +rotDeg || 0, facingDeg: facingDeg == null ? null : +facingDeg, k, lib: state.lib });
     else {
       const r = m.rooms.find((r) => r.id === String(room)) || (room && m.rooms.find((r) => (state.overrides[r.id]?.name ?? r.name ?? '').toLocaleLowerCase('tr') === String(room).toLocaleLowerCase('tr')));
       if (!r) throw new Error('mahal bulunamadı: ' + room + ' (list_rooms ile kimliğe bak)');
-      res = layoutInRoom({ room: r, kind, count: +count || 0, sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, layout: layout || 'grid', spacingCm: +spacingCm || 60, rotDeg: rotDeg == null ? null : +rotDeg, obstacles, k, lib: state.lib });
+      res = layoutInRoom({ room: r, kind, count: +count || 0, sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, layout: layout || 'grid', spacingCm: +spacingCm || 60, rotDeg: rotDeg == null ? null : +rotDeg, facingDeg: facingDeg == null ? null : +facingDeg, aisleCm: aisleCm == null ? null : +aisleCm, obstacles, k, lib: state.lib });
       if (!res.items.length) throw new Error('mahale sığmadı; daha küçük ölçü, daha az adet ya da başka layout deneyin');
     }
     const n0 = state.manualFixtures.length;
-    const added = res.items.map((it, i) => ({ id: 'FM' + (n0 + i + 1), kind: it.kind, label: it.lib ? (state.lib.get(it.lib)?.label || it.lib) : (FIXTURE_KINDS[it.kind]?.label || it.kind), name: it.lib ? 'kütüphane: ' + it.lib : 'sohbetle eklendi', poly: it.poly, center: it.center, rot: it.rot, wCm: it.wCm, hCm: it.hCm, l: -1, source: 'manual', lib: it.lib }));
+    const added = res.items.map((it, i) => ({ id: 'FM' + (n0 + i + 1), kind: it.kind, label: it.lib ? (state.lib.get(it.lib)?.label || it.lib) : (FIXTURE_KINDS[it.kind]?.label || it.kind), name: it.lib ? 'kütüphane: ' + it.lib : 'sohbetle eklendi', poly: it.poly, center: it.center, rot: it.rot, facing: it.facing, wCm: it.wCm, hCm: it.hCm, l: -1, source: 'manual', lib: it.lib }));
     state.manualFixtures.push(...added);
     state.fixtures = state.fixtures.concat(added);
     plan.setFixtures(liveFixtures()); renderStats(); rebuild3d();
@@ -1805,7 +1855,11 @@ const agentUi = (() => {
   $('legacyLink').onclick = (e) => { e.preventDefault(); toggleLegacy(true); };
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('legacy').hidden) toggleLegacy(false); });
   $('agentStop').onclick = () => ctl?.abort();
-  const send = () => { const t = $('chatIn').value.trim(); if (!t) return; $('chatIn').value = ''; run(t); };
+  const send = () => {
+    const t = $('chatIn').value.trim(); if (!t) return; $('chatIn').value = '';
+    const f = focusLabel();
+    run(f && !/\[Seçili:/.test(t) ? `[Seçili: ${f}] ${t}` : t, { shown: t });
+  };
   $('chatSend').onclick = send;
   $('chatIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
   return {

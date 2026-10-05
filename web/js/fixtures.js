@@ -25,14 +25,26 @@ export const FIXTURE_KINDS = {
   bed: { label: 'Yatak', ifc: 'BED', size: [160, 200] },
   cabinet: { label: 'Dolap', ifc: 'FILECABINET', size: [90, 60] },
   counter: { label: 'Tezgâh', ifc: 'USERDEFINED', size: [200, 60] },
+  stair: { label: 'Merdiven', ifc: 'STRAIGHT_RUN_STAIR', size: [120, 300] },
+  outlet: { label: 'Priz', ifc: 'POWEROUTLET', size: [8, 5] },
+  switch: { label: 'Anahtar', ifc: 'TOGGLESWITCH', size: [8, 5] },
+  light: { label: 'Aydınlatma armatürü', ifc: 'POINTSOURCE', size: [60, 60] },
+  panel: { label: 'Elektrik panosu', ifc: 'DISTRIBUTIONBOARD', size: [60, 25] },
 };
 const SANITARY = new Set(['wc', 'squat', 'urinal', 'sink', 'ksink', 'shower', 'bathtub', 'drain']);
 const FURNITURE = new Set(['table', 'desk', 'chair', 'sofa', 'bed', 'cabinet', 'counter']);
+const ELECTRICAL = new Set(['outlet', 'switch', 'light', 'panel']);
+export const isElectrical = (k) => ELECTRICAL.has(k);
 export const isSanitary = (k) => SANITARY.has(k);
 export const isFurniture = (k) => FURNITURE.has(k);
 
 // Blok adı / katman adı -> tür (sıra önemli: özel olan önce)
 const NAME_RULES = [
+  ['stair', /merdiven|stair|basamak|\bstep\b/i],
+  ['panel', /\bpano\b|elektrik\s*pano|distribution\s*board|\bdb\b|sigorta/i],
+  ['outlet', /\bpriz\b|socket|outlet|receptacle/i],
+  ['switch', /anahtar|\bswitch\b|komütatör|vavien/i],
+  ['light', /armat[uü]r|aydınlatma|aydinlatma|luminaire|lamba|\blamp\b|spot|downlight|\bled\b|avize|aplik|fluore/i],
   ['squat', /alaturka|hela\s*ta[sş]|squat/i],
   ['urinal', /pisuvar|pisuar|urinal/i],
   ['wc', /klozet|closet|\bwc\b|toilet|tuvalet|throne|water\s*closet|\bw\.?c\b/i],
@@ -55,7 +67,8 @@ const NAME_RULES = [
 // Süs: hiç gösterilmez
 export const DECOR_RE = /a[gğ]a[cç]|\btree\b|palm|agave|frangipani|bitki|plant|[cç]i[cç]ek|flower|peyzaj|landscape|\bgrass\b|[cç]im\b|insan|people|person|human|figure|silhouette|ara[cç]|\bcar\b|vehicle|otomobil|bisiklet|bike|\bbus\b|kamyon|truck|ku[sş]\b|bird|logo|kuzey|north\s*arrow|magoo/i;
 // Tefriş katmanı adları (patlatılmış çizgiler için)
-const FURN_LAYER_RE = /tefri|furn|mobilya|vitrifiye|sanitary|banyo|bath|fixture|\bwc\b|mutfak|kitchen|equipment|cihaz/i;
+const FURN_LAYER_RE = /tefri|furn|mobilya|vitrifiye|sanitary|banyo|bath|fixture|\bwc\b|mutfak|kitchen|equipment|cihaz|merdiven|stair/i;
+const STAIR_LAYER_RE = /merdiven|stair/i;
 const WET_ROOM_RE = /\bwc\b|tuvalet|banyo|lavabo|du[sş]|hela|abdest|bath|toilet|restroom|shower|[ıi]slak/i;
 
 // Plausible boyut aralıkları (cm): [minShort, maxShort, minLong, maxLong]
@@ -64,6 +77,7 @@ const SIZE_OK = {
   faucet: [3, 25, 5, 30], shower: [60, 130, 60, 160], bathtub: [60, 100, 120, 200], ac: [20, 110, 50, 130], radiator: [5, 30, 40, 250],
   drain: [8, 40, 8, 40], table: [40, 160, 50, 320], desk: [50, 110, 90, 320], chair: [35, 100, 35, 100], sofa: [60, 120, 100, 360],
   bed: [60, 220, 150, 260], cabinet: [25, 120, 30, 400], counter: [40, 120, 60, 600],
+  stair: [60, 300, 100, 800], outlet: [2, 20, 2, 20], switch: [2, 20, 2, 20], light: [5, 150, 5, 150], panel: [10, 120, 20, 120],
 };
 
 function classifyName(name) {
@@ -182,22 +196,36 @@ export function extractFixtures(drawing, { region, units, rooms = [], unitScale,
       const w = (c - a) * toCm, h = (d - b) * toCm, cx = (a + c) / 2, cy = (b + d) / 2;
       if (Math.max(w, h) < 8 || Math.max(w, h) > 250) continue;
       const room = wet.find((r) => pointInPoly(cx, cy, r.poly));
+      const anyRoom = room || rooms.find((r) => pointInPoly(cx, cy, r.poly));
       const lname = layerName(cl[0].pr.l);
       let kind = classifyName(lname);
-      if (kind === 'decor' || (!kind && !room)) continue;
+      let guess = false;
+      if (kind === 'decor') continue;
+      if (!kind && STAIR_LAYER_RE.test(lname) && Math.max(w, h) >= 100) kind = 'stair';
+      if (!kind && !anyRoom) continue;
       if (!kind || kind === 'cabinet' || kind === 'table') {
-        // ıslak hacimde boyuta göre tahmin
         const s = Math.min(w, h), L = Math.max(w, h), closed = cl.some((it) => it.pr.closed || it.pr.pts.length >= 10);
-        if (!closed) continue;
-        if (s >= 32 && s <= 55 && L >= 55 && L <= 85 && L / s >= 1.3) kind = 'wc';
-        else if (s >= 35 && s <= 65 && L >= 40 && L <= 80 && L / s < 1.6) kind = 'sink';
-        else if (s >= 70 && s <= 110 && L <= 120 && L / s < 1.3) kind = 'shower';
-        else if (s >= 65 && s <= 95 && L >= 140 && L <= 190) kind = 'bathtub';
-        else if (s <= 25 && L <= 25 && s >= 8) kind = 'drain';
-        else continue;
+        if (!closed && !room) continue;
+        if (room) {
+          // ıslak hacimde boyuta göre tahmin
+          if (s >= 32 && s <= 55 && L >= 55 && L <= 85 && L / s >= 1.3) kind = 'wc';
+          else if (s >= 35 && s <= 65 && L >= 40 && L <= 80 && L / s < 1.6) kind = 'sink';
+          else if (s >= 70 && s <= 110 && L <= 120 && L / s < 1.3) kind = 'shower';
+          else if (s >= 65 && s <= 95 && L >= 140 && L <= 190) kind = 'bathtub';
+          else if (s <= 25 && L <= 25 && s >= 8) kind = 'drain';
+          else continue;
+        } else {
+          // kuru mahalde patlatılmış tefriş: boyuttan kaba tahmin, 'guess' işaretli (Claude onaylar / düzeltir)
+          if (cl.length < 3 || s < 30 || L > 320) continue;
+          guess = true;
+          if (s >= 38 && s <= 65 && L <= 75 && L / s < 1.5) kind = 'chair';
+          else if (s >= 60 && s <= 130 && L >= 100 && L <= 320) kind = 'table';
+          else if (s >= 40 && s <= 60 && L >= 80) kind = 'cabinet';
+          else continue;
+        }
       } else if (!sizeOk(kind, w, h)) continue;
       const poly = [[a, b], [c, b], [c, d], [a, d]];
-      fixtures.push({ kind, name: lname, poly, center: [cx, cy], rot: 0, wCm: w, hCm: h, l: cl[0].pr.l, source: 'cluster' });
+      fixtures.push({ kind, name: lname, poly, center: [cx, cy], rot: 0, wCm: w, hCm: h, l: cl[0].pr.l, source: 'cluster', guess });
     }
   }
   // aynı yerde iki kayıt (blok + küme): bloğu tut

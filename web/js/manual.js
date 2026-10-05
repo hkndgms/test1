@@ -5,13 +5,16 @@ import { pointInPoly, polyArea } from './detect.js';
 import { FIXTURE_KINDS } from './fixtures.js';
 
 // Hazır takımlar: ana parça + çevresindeki parçalar (cm, yerel: x sağa, y ileri)
+// around: [kind, w, d, x, y, facingDeg] — facing: parçanın ön yüzünün baktığı yön (yerel; 90 = +y)
+// Sandalyeler masaya dönük: masanın altındaki (-y) sandalye +y'ye (90°), üstündeki -y'ye (270°) bakar.
+const toward = (x, y) => (Math.atan2(-y, -x) * 180) / Math.PI; // parçadan merkeze bakış
 export const SETS = {
-  table_set: { label: 'Masa + 4 sandalye', main: ['table', 120, 80], around: [['chair', 45, 45, 0, -65], ['chair', 45, 45, 0, 65], ['chair', 45, 45, -85, 0], ['chair', 45, 45, 85, 0]] },
-  meeting_set: { label: 'Toplantı masası + 8 sandalye', main: ['table', 300, 110], around: [[-100, -80], [0, -80], [100, -80], [-100, 80], [0, 80], [100, 80], [-175, 0], [175, 0]].map(([x, y]) => ['chair', 45, 45, x, y]) },
-  desk_set: { label: 'Çalışma masası + sandalye', main: ['desk', 140, 70], around: [['chair', 50, 50, 0, -65]] },
-  sofa_set: { label: 'Kanepe + sehpa', main: ['sofa', 200, 85], around: [['table', 90, 50, 0, -90]] },
-  bed_set: { label: 'Yatak + 2 komodin', main: ['bed', 160, 200], around: [['cabinet', 45, 40, -105, 80], ['cabinet', 45, 40, 105, 80]] },
-  wc_set: { label: 'Klozet + lavabo', main: ['wc', 40, 70], around: [['sink', 50, 45, 80, 10]] },
+  table_set: { label: 'Masa + 4 sandalye', main: ['table', 120, 80, 90], around: [[0, -65], [0, 65], [-85, 0], [85, 0]].map(([x, y]) => ['chair', 45, 45, x, y, toward(x, y)]) },
+  meeting_set: { label: 'Toplantı masası + 8 sandalye', main: ['table', 300, 110, 90], around: [[-100, -80], [0, -80], [100, -80], [-100, 80], [0, 80], [100, 80], [-175, 0], [175, 0]].map(([x, y]) => ['chair', 45, 45, x, y, toward(x, y)]) },
+  desk_set: { label: 'Çalışma masası + sandalye', main: ['desk', 140, 70, 270], around: [['chair', 50, 50, 0, -65, 90]] },
+  sofa_set: { label: 'Kanepe + sehpa', main: ['sofa', 200, 85, 270], around: [['table', 90, 50, 0, -90, 90]] },
+  bed_set: { label: 'Yatak + 2 komodin', main: ['bed', 160, 200, 270], around: [['cabinet', 45, 40, -105, 80, 270], ['cabinet', 45, 40, 105, 80, 270]] },
+  wc_set: { label: 'Klozet + lavabo', main: ['wc', 40, 70, 90], around: [['sink', 50, 45, 80, 10, 90]] },
 };
 
 const rectPoly = (cx, cy, w, d, rot) => {
@@ -51,28 +54,33 @@ function spec(kind, sizeCm, lib = null) {
   const li = lib?.get?.(kind);
   if (li && li.kind !== 'ignore') {
     const [w, d] = sizeCm && sizeCm.length === 2 ? sizeCm : li.sizeCm;
-    return { w, d, parts: [[li.kind, w, d, 0, 0, li.name]], label: li.label };
+    return { w, d, parts: [[li.kind, w, d, 0, 0, li.name, 90]], label: li.label };
   }
   const set = SETS[kind];
   if (set) {
-    const [mk, mw, md] = set.main;
+    const [mk, mw, md, mf] = set.main;
     let minX = -mw / 2, maxX = mw / 2, minY = -md / 2, maxY = md / 2;
     for (const [, w, d, x, y] of set.around) { minX = Math.min(minX, x - w / 2); maxX = Math.max(maxX, x + w / 2); minY = Math.min(minY, y - d / 2); maxY = Math.max(maxY, y + d / 2); }
-    return { w: maxX - minX, d: maxY - minY, parts: [[mk, mw, md, 0, 0], ...set.around], label: set.label };
+    return { w: maxX - minX, d: maxY - minY, parts: [[mk, mw, md, 0, 0, undefined, mf ?? 90], ...set.around.map((a) => [a[0], a[1], a[2], a[3], a[4], undefined, a[5] ?? 90])], label: set.label };
   }
   const fk = FIXTURE_KINDS[kind];
   if (!fk) return null;
   const [w, d] = sizeCm && sizeCm.length === 2 ? sizeCm : fk.size;
-  return { w, d, parts: [[kind, w, d, 0, 0]], label: fk.label };
+  return { w, d, parts: [[kind, w, d, 0, 0, undefined, 90]], label: fk.label };
 }
 
 // Mahale yerleşim: layout grid (satır-sütun), row (tek sıra), perimeter (duvar dibi).
 // Döndürür: [{kind, poly, center, rot, wCm, hCm}] (çizim biriminde)
-export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'grid', spacingCm = 60, marginCm = 50, rotDeg = null, obstacles = [], k, lib = null }) {
+// facingDeg: öğelerin ön yüzünün baktığı dünya açısı (90 = kuzey/+y). Verilirse yerleşim ekseni ona dik olur
+// ve bütün öğeler aynı yöne bakar (sıra düzeni). layout 'rows': yan yana sıralar, sıralar arası aisleCm yürüme payı.
+export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'grid', spacingCm = 60, marginCm = 50, rotDeg = null, facingDeg = null, aisleCm = null, obstacles = [], k, lib = null }) {
   const sp = spec(kind, sizeCm, lib);
   if (!sp) throw new Error('bilinmeyen tür: ' + kind);
-  const rot = rotDeg == null ? roomAxis(room.poly) : (rotDeg * Math.PI) / 180;
-  const W = sp.w * k, D = sp.d * k, gap = spacingCm * k, margin = marginCm * k;
+  const rot = facingDeg != null ? ((facingDeg - 90) * Math.PI) / 180 : rotDeg == null ? roomAxis(room.poly) : (rotDeg * Math.PI) / 180;
+  const W = sp.w * k, D = sp.d * k, margin = marginCm * k;
+  const rows = layout === 'rows';
+  const gapX = (rows ? Math.min(spacingCm, 10) : spacingCm) * k; // sıra düzeninde yan yana sık
+  const gap = rows ? (aisleCm == null ? 90 : aisleCm) * k : spacingCm * k;
   const c = Math.cos(rot), s = Math.sin(rot);
   // mahali yerel eksene çevir
   const toLocal = (p) => [(p[0]) * c + (p[1]) * s, -(p[0]) * s + (p[1]) * c];
@@ -86,9 +94,9 @@ export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'g
     const [wx, wy] = toWorld(lx, ly);
     const poly = rectPoly(wx, wy, W, D, rot);
     if (!fits(poly, room.poly, obstacles.concat(out.map((o) => o.foot)))) return false;
-    const items = sp.parts.map(([pk, pw, pd, px, py, ln]) => {
+    const items = sp.parts.map(([pk, pw, pd, px, py, ln, fc]) => {
       const [ox, oy] = toWorld(lx + px * k, ly + py * k);
-      return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, rot), center: [ox, oy], rot, wCm: pw, hCm: pd, lib: ln };
+      return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, rot), center: [ox, oy], rot, wCm: pw, hCm: pd, lib: ln, facing: rot + ((fc ?? 90) * Math.PI) / 180 };
     });
     out.push({ foot: poly, items });
     return true;
@@ -109,22 +117,23 @@ export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'g
         const cx = a[0] + ux * t + inward[0] * (D / 2 + margin * 0.3), cy = a[1] + uy * t + inward[1] * (D / 2 + margin * 0.3);
         const poly = rectPoly(cx, cy, W, D, r);
         if (!fits(poly, room.poly, obstacles.concat(out.map((o) => o.foot)))) continue;
-        const items = sp.parts.map(([pk, pw, pd, px, py, ln]) => {
+        const items = sp.parts.map(([pk, pw, pd, px, py, ln, fc]) => {
           const ox = cx + Math.cos(r) * px * k - Math.sin(r) * py * k, oy = cy + Math.sin(r) * px * k + Math.cos(r) * py * k;
-          return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, r), center: [ox, oy], rot: r, wCm: pw, hCm: pd, lib: ln };
+          // duvar dibi: ön yüz odaya (inward) bakar
+          return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, r), center: [ox, oy], rot: r, wCm: pw, hCm: pd, lib: ln, facing: Math.atan2(inward[1], inward[0]) };
         });
         out.push({ foot: poly, items });
       }
     }
   } else {
-    const cols = Math.max(1, Math.floor((x1 - x0 - 2 * margin + gap) / (W + gap)));
-    const rows = layout === 'row' ? 1 : Math.max(1, Math.floor((y1 - y0 - 2 * margin + gap) / (D + gap)));
-    const gw = cols * (W + gap) - gap, gh = rows * (D + gap) - gap;
+    const cols = Math.max(1, Math.floor((x1 - x0 - 2 * margin + gapX) / (W + gapX)));
+    const nrows = layout === 'row' ? 1 : Math.max(1, Math.floor((y1 - y0 - 2 * margin + gap) / (D + gap)));
+    const gw = cols * (W + gapX) - gapX, gh = nrows * (D + gap) - gap;
     const sx = (x0 + x1) / 2 - gw / 2 + W / 2, sy = (y0 + y1) / 2 - gh / 2 + D / 2;
-    for (let r = 0; r < rows && out.length < want; r++) for (let q = 0; q < cols && out.length < want; q++) place(sx + q * (W + gap), sy + r * (D + gap));
+    for (let r = 0; r < nrows && out.length < want; r++) for (let q = 0; q < cols && out.length < want; q++) place(sx + q * (W + gapX), sy + r * (D + gap));
     // düzenli ızgara sığmadıysa (dolu / düzensiz mahal): ince adımlarla tarayarak açgözlü yerleştir
     if (!out.length || out.length < want) {
-      const stepX = Math.max((W + gap) / 2, 10 * k), stepY = Math.max((D + gap) / 2, 10 * k);
+      const stepX = Math.max((W + gapX) / 2, 10 * k), stepY = Math.max((D + gap) / 2, 10 * k);
       for (let ly = y0 + margin / 2 + D / 2; ly <= y1 - margin / 2 - D / 2 && out.length < want; ly += stepY) {
         for (let lx = x0 + margin / 2 + W / 2; lx <= x1 - margin / 2 - W / 2 && out.length < want; lx += stepX) place(lx, ly);
         if (layout === 'row' && out.length) break;
@@ -135,13 +144,13 @@ export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'g
 }
 
 // Tek öğe: belirli noktaya
-export function fixtureAt({ kind, x, y, sizeCm = null, rotDeg = 0, k, lib = null }) {
+export function fixtureAt({ kind, x, y, sizeCm = null, rotDeg = 0, facingDeg = null, k, lib = null }) {
   const sp = spec(kind, sizeCm, lib);
   if (!sp) throw new Error('bilinmeyen tür: ' + kind);
-  const rot = (rotDeg * Math.PI) / 180;
-  return { label: sp.label, groups: 1, items: sp.parts.map(([pk, pw, pd, px, py, ln]) => {
+  const rot = facingDeg != null ? ((facingDeg - 90) * Math.PI) / 180 : (rotDeg * Math.PI) / 180;
+  return { label: sp.label, groups: 1, items: sp.parts.map(([pk, pw, pd, px, py, ln, fc]) => {
     const ox = x + Math.cos(rot) * px * k - Math.sin(rot) * py * k, oy = y + Math.sin(rot) * px * k + Math.cos(rot) * py * k;
-    return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, rot), center: [ox, oy], rot, wCm: pw, hCm: pd, lib: ln };
+    return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, rot), center: [ox, oy], rot, wCm: pw, hCm: pd, lib: ln, facing: rot + ((fc ?? 90) * Math.PI) / 180 };
   }) };
 }
 

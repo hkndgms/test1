@@ -21,6 +21,9 @@ export const SYSTEMS = {
   heating: { label: 'Isıtma', color: '#d9534f', ifc: 'HEATING' },
   gas: { label: 'Gaz', color: '#d4b000', ifc: 'GAS' },
   fire: { label: 'Yangın / sprinkler', color: '#e0245e', ifc: 'FIREPROTECTION' },
+  electrical: { label: 'Elektrik (kuvvetli akım)', color: '#f2a93b', ifc: 'ELECTRICAL' },
+  lighting: { label: 'Aydınlatma', color: '#ffd54a', ifc: 'LIGHTING' },
+  lowvoltage: { label: 'Zayıf akım (data, yangın algılama)', color: '#5ac8fa', ifc: 'DATA' },
   other: { label: 'Diğer mekanik', color: '#7d8590', ifc: 'NOTDEFINED' },
 };
 
@@ -74,6 +77,14 @@ export const BUILTIN_RULES = [
   R('HIDROFOR|POMPA|PUMP|KAZAN|BOILER|BOYLER|DEPO|TANK|ISITICI|HEATER|KOLLEKTOR|COLLECTOR|EKSPANSIYON', 'equipment', 'other', 'floor', 0, 120, 'Mekanik oda cihazı'),
   R('CIHAZ|EQUIP|TERMOSTAT|THERMOSTAT|SENSOR', 'equipment', 'other', 'floor', 140, 12, 'Duvar tipi cihaz (termostat, sensör)'),
   R('^M[-_ ].*TEFRIS|MEKANIK\\s*TEFRIS', 'equipment', 'other', 'floor', 0, 80, 'Mekanik tefriş (cihaz sembolleri)'),
+  // Elektrik projeleri
+  R('KABLO\\s*TAVA|CABLE\\s*TRAY|BUSBAR|BARA', 'pipe', 'electrical', 'ceiling', -20, 10, 'Kablo tavası / busbar'),
+  R('\\bPANO|DISTRIBUTION\\s*BOARD|\\bDB\\b|SIGORTA', 'equipment', 'electrical', 'floor', 120, 80, 'Elektrik panosu'),
+  R('\\bPRIZ|SOCKET|OUTLET|RECEPT', 'terminal', 'electrical', 'floor', 40, 8, 'Priz'),
+  R('ANAHTAR|SWITCH|VAVIEN|KOMUTATOR', 'terminal', 'electrical', 'floor', 110, 8, 'Anahtar'),
+  R('AYDINLATMA|ARMATUR|LUMINAIRE|LIGHTING|\\bLAMBA|\\bLED\\b|SPOT|DOWNLIGHT|AVIZE|APLIK|ACIL\\s*AYD|EXIT', 'terminal', 'lighting', 'ceiling', 0, 5, 'Aydınlatma armatürü'),
+  R('\\bDATA\\b|TELEFON|\\bTV\\b|UYDU|ZAYIF\\s*AKIM|CCTV|KAMERA|YANGIN\\s*(ALGILAMA|IHBAR|DEDEKT)|DEDEKTOR|DETECTOR|SIREN|BUTON|ALARM', 'terminal', 'lowvoltage', 'ceiling', -5, 8, 'Zayıf akım ucu (data, kamera, dedektör)'),
+  R('^E[-_ ]|ELEKTRIK|ELECTRIC|ELK[-_ ]|\\bKUVVETLI\\s*AKIM|\\bLINYE|\\bSORTI|ENERJI', 'pipe', 'electrical', 'ceiling', -15, 2, 'Elektrik hattı (linye / sorti)'),
 ];
 
 // Türkçe karakterleri katlayıp büyük harfe çevir (eşleştirme için)

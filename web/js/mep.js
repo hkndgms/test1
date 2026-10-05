@@ -247,6 +247,26 @@ export function extractMep(drawing, { region, units, profiles }) {
   }
   for (const p of pipes) delete p._ld;
 
+  // Kanal yüksekliği: etiketli kanaldan (600x300) birbirine değen etiketsiz parçalara (dirsek, redüksiyon,
+  // branşman) yayılır; böylece aynı hattaki parçalar aynı yükseklik/üst kotta durur. Redüksiyonda iki
+  // komşu farklı yükseklikteyse büyük olan alınır (üst kot sabit, alt yüz eğimli varsayılır).
+  if (ducts.length > 1 && ducts.some((d) => d.heightCm)) {
+    const bb = ducts.map((d) => { let a = Infinity, b = Infinity, c = -Infinity, e = -Infinity; for (const [x, y] of d.poly) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); e = Math.max(e, y); } return [a, b, c, e]; });
+    const tol = 3 * k;
+    const touch = (i, j) => bb[i][0] <= bb[j][2] + tol && bb[j][0] <= bb[i][2] + tol && bb[i][1] <= bb[j][3] + tol && bb[j][1] <= bb[i][3] + tol
+      && ducts[i].poly.some((p) => ducts[j].poly.some((q) => Math.hypot(p[0] - q[0], p[1] - q[1]) <= tol) || pointIn(p, ducts[j].poly));
+    let changed = true, guard = 0;
+    while (changed && guard++ < 20) {
+      changed = false;
+      for (let i = 0; i < ducts.length; i++) {
+        if (ducts[i].heightCm) continue;
+        let best = 0;
+        for (let j = 0; j < ducts.length; j++) if (j !== i && ducts[j].heightCm && touch(i, j)) best = Math.max(best, ducts[j].heightCm);
+        if (best) { ducts[i].heightCm = best; ducts[i].heightSrc = 'komşu'; changed = true; }
+      }
+    }
+  }
+
   return { pipes, ducts, boxes, dropped };
 }
 
