@@ -2,6 +2,7 @@
 // Hem 3B görünüm hem de IFC yazıcı bu listeyi kullanır.
 
 import { polyArea, pointInPoly } from './detect.js';
+import { cutWall } from './manual.js';
 
 export const DEFAULT_BUILD = {
   projectName: '',
@@ -48,12 +49,17 @@ export function buildSolids(model, params, overrides = {}) {
     const o = ov(w.id);
     if (o.deleted) continue;
     const h = (o.heightCm ?? P.wallHeightCm) / 100;
-    const profile = ccw(w.poly.map(tr));
-    wallPolysM.push(profile);
-    out.push({
-      type: 'wall', id: w.id, src: w.id, name: `Duvar ${Math.round(w.thickness * model.unitScale)} cm`,
-      profile, z0: 0, z1: h,
-      props: { exterior: !!w.exterior, thicknessCm: Math.round(w.thickness * model.unitScale), lengthM: +(w.length * s || 0).toFixed(2) },
+    // sohbetle açılan kapı/pencereler: duvar o aralıklarda kesilir
+    const cuts = model.openings.filter((op) => op.manual && op.hostWall === w.id && !ov(op.id).deleted && (ov(op.id).kind || op.kind) !== 'solid').map((op) => op.span);
+    const polys = cuts.length ? cutWall(w.poly, cuts) : [w.poly];
+    polys.forEach((poly, i) => {
+      const profile = ccw(poly.map(tr));
+      wallPolysM.push(profile);
+      out.push({
+        type: 'wall', id: polys.length > 1 ? `${w.id}-p${i + 1}` : w.id, src: w.id, name: `Duvar ${Math.round(w.thickness * model.unitScale)} cm`,
+        profile, z0: 0, z1: h,
+        props: { exterior: !!w.exterior, thicknessCm: Math.round(w.thickness * model.unitScale), lengthM: +(w.length * s || 0).toFixed(2) },
+      });
     });
   }
   for (const c of model.columns) {

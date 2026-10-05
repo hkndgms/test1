@@ -36,6 +36,17 @@ const { chromium } = require(process.env.PW || 'playwright');
         if (firstOpening) changes.openings = { [firstOpening]: { kind: 'door' } };
         const applied = await call('apply', { changes });
         text = `İnceleme bitti. Özet ${String(ov).length} karakter, boş geçiş listesi ${String(ops).split('\n').length - 1} satır.\nUygulandı: ${applied}\n[${log.join(', ')}]`;
+      } else if (/masa|sandalye|tefriş ekle/i.test(last)) {
+        const rooms = String(await call('list_rooms')).split('\n').slice(1);
+        const big = rooms.map((r) => r.split('\t')).sort((a, b) => parseFloat(b[1]) - parseFloat(a[1]))[0];
+        const r = await call('add_fixtures', { kind: 'table_set', room: big[0], count: 4 });
+        const r2 = await call('add_fixtures', { kind: 'ac', room: big[0], count: 1, layout: 'perimeter' });
+        text = `${r} / ${r2} [${log.join(', ')}]`;
+      } else if (/kapı aç|kapı ekle/i.test(last)) {
+        const walls = String(await call('list_walls')).split('\n').slice(2).map((r) => r.split('\t')).filter((r) => r[1] === 'duvar' && r[4] === 'iç' && parseFloat(r[3]) > 3);
+        const r = await call('add_opening', { wall: walls[0][0], kind: 'door', widthCm: 100 });
+        const c = await call('add_column', { at: [300, 300], sizeCm: [40, 40] });
+        text = `${r} / ${c} [${log.join(', ')}]`;
       } else if (/3b|3d/i.test(last)) {
         const r = await call('show', { view: '3d' });
         text = `3B görünüme geçtim (${r}). [${log.join(', ')}]`;
@@ -74,6 +85,18 @@ const { chromium } = require(process.env.PW || 'playwright');
   await page.press('#chatIn', 'Enter');
   await page.waitForFunction(() => document.querySelectorAll('#chatLog .msg.user').length >= 3 && /Tamam/.test(document.getElementById('agentStatus').textContent), null, { timeout: 60000 });
   console.log('tab 3d after chat:', await page.$eval('#tab3d', (b) => b.classList.contains('on')));
+  // çizimde olmayan öğeler: masa-sandalye, klima, kapı, kolon
+  for (const msg of ['Giriş holüne masa sandalye koy', 'Koridora bir kapı aç']) {
+    const n = await page.$$eval('#chatLog .msg.user', (l) => l.length);
+    await page.fill('#chatIn', msg); await page.press('#chatIn', 'Enter');
+    await page.waitForFunction((n) => document.querySelectorAll('#chatLog .msg.user').length > n && /Tamam|veremedi/.test(document.getElementById('agentStatus').textContent), n, { timeout: 60000 });
+    console.log('>', msg, '→', (await page.$$eval('#chatLog .msg.ai', (l) => l[l.length - 1].textContent)).slice(0, 200));
+  }
+  console.log('side after adds:', await page.textContent('#sideSum'));
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: path.join(out, 'e2e-agent-adds.png') });
+  const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20000 }), page.click('#btnExportTop')]);
+  const ifcPath = path.join(out, 'agent-' + dl.suggestedFilename()); await dl.saveAs(ifcPath); console.log('ifc:', ifcPath);
   console.log('sample calls:', JSON.stringify(await page.evaluate(() => window.__sampleCalls.map((c) => ({ turns: c.turns, tier: c.tier, tools: c.tools.length })))));
   await page.screenshot({ path: path.join(out, 'e2e-agent.png') });
   // analiz ekranı akışı: yeni dosya yerine demo yeniden açılıp wizClaude benzetimi

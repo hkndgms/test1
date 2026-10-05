@@ -7,6 +7,8 @@ export const AGENT_RULES = `Sen DWG2BIM uygulamasının içinde çalışan deney
 
 Sana verilen ARAÇLAR sayfanın gerçek fonksiyonlarıdır: liste araçları projenin güncel durumunu okur, "apply" aracı ayarları DOĞRUDAN uygular (katman rolleri, ölçüler, boşluk türleri, mahal adları, tesisat katman profilleri, bilgi bankası kuralları, asma tavan kotu, gezi rotası, rapor). Öneri yapma, uygula; sonra ne yaptığını 1-3 cümleyle söyle. Emin olamadığın, geri alınması zor bir şeyde (katman rolünü değiştirmek bütün algılamayı yeniler) önce kısa bir soru sorabilirsin.
 
+Çizimde olmayan şeyleri de ekleyebilirsin — bu uygulamanın yetki alanındadır: add_fixtures (mahale masa-sandalye, klima, klozet vb.; otomatik yerleşim), add_opening (duvara kapı/pencere), add_column, add_wall, delete_elements. "Yapılamaz / DWG'ye eklenmeli / Revit'te yapılmalı" deme; aracı çağır. Eklenenler 3B'ye ve IFC'ye girer.
+
 Çalışma biçimi:
 - Önce ihtiyacın olan liste araçlarını çağır (gerekiyorsa birkaçını aynı turda), sonra tek bir "apply" çağrısında bütün değişiklikleri topla. Sonucu kontrol etmek için gerekirse tekrar listele.
 - Katman adlarını listede GÖRDÜĞÜN GİBİ yaz. Kimlikler: O = boşluk, R = mahal, W = duvar, C = kolon, G = cam cephe, F = tefriş.
@@ -102,6 +104,24 @@ export function makeTools(api) {
       description: 'Bir tefriş öğesinin türünü değiştirir. kind: wc, squat, urinal, sink, ksink, faucet, shower, bathtub, ac, radiator, drain, table, desk, chair, sofa, bed, cabinet, counter.',
       inputSchema: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' } }, required: ['id', 'kind'] },
       execute: ({ id, kind }) => api.setFixture(String(id), String(kind)),
+    },
+    {
+      name: 'add_fixtures',
+      description: 'Çizimde OLMAYAN tefrişi ekler ve mahale otomatik yerleştirir: kind tek tür (table, chair, desk, sofa, bed, cabinet, counter, wc, sink, urinal, shower, bathtub, ac, radiator…) ya da takım (table_set = masa + 4 sandalye, meeting_set, desk_set, sofa_set, bed_set, wc_set). room: mahal kimliği (R..). count: kaç takım/öğe (0 = sığdığı kadar). layout: grid | row | perimeter (duvar dibi). sizeCm [en, derinlik], spacingCm, rotDeg isteğe bağlı. room yerine at [x,y] (çizim koordinatı) verilirse tek öğe o noktaya konur. Kullanıcı "masa sandalye koy", "klima ekle" dediğinde kullan.',
+      inputSchema: { type: 'object', properties: { kind: { type: 'string' }, room: { type: 'string' }, count: { type: 'number' }, layout: { type: 'string' }, sizeCm: { type: 'array', items: { type: 'number' } }, spacingCm: { type: 'number' }, rotDeg: { type: 'number' }, at: { type: 'array', items: { type: 'number' } } }, required: ['kind'] },
+      execute: (inp) => api.addFixtures(inp),
+    },
+    {
+      name: 'add_opening',
+      description: 'Çizimde olmayan bir kapı ya da pencereyi mevcut bir duvara açar (duvar 3B\'de kesilir). wall: duvar kimliği (W..), kind door|window, widthCm, atCm: duvarın başından mesafe (boşsa ortaya), heightCm / sillCm isteğe bağlı.',
+      inputSchema: { type: 'object', properties: { wall: { type: 'string' }, kind: { type: 'string' }, widthCm: { type: 'number' }, atCm: { type: 'number' }, heightCm: { type: 'number' }, sillCm: { type: 'number' } }, required: ['wall'] },
+      execute: (inp) => api.addOpening(inp),
+    },
+    {
+      name: 'add_column',
+      description: 'Çizimde olmayan bir kolon ekler: at [x,y] çizim koordinatı, sizeCm [en, boy] (varsayılan 40x40), rotDeg.',
+      inputSchema: { type: 'object', properties: { at: { type: 'array', items: { type: 'number' } }, sizeCm: { type: 'array', items: { type: 'number' } }, rotDeg: { type: 'number' } }, required: ['at'] },
+      execute: ({ at, sizeCm, rotDeg }) => api.addColumn(at, sizeCm, rotDeg),
     },
     {
       name: 'add_wall',

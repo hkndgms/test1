@@ -11,6 +11,7 @@ import { makeZip } from './zip.js';
 import { Plan2D, findById, findMepById } from './view2d.js';
 import { buildPrompt, buildSnapshot, parseAnswer } from './ai-prompt.js';
 import { makeTools, runAgent, REVIEW_TASK, errorText } from './agent.js';
+import { layoutInRoom, fixtureAt, openingOnWall, columnAt, SETS } from './manual.js';
 import { readRvt } from './rvt.js';
 import { diagnose, SEV_LABEL } from './diagnose.js';
 import { planTour } from './tour.js';
@@ -52,6 +53,7 @@ const state = {
   fixtures: [], // tanınan tefriş (klozet, lavabo, klima...)
   decorIgnored: 0,
   chat: [], // Claude ajan sohbeti (sayfa tutar; Claude hafızasız)
+  manualFixtures: [], manualOpenings: [], manualColumns: [], // sohbetle eklenen, çizimde olmayan öğeler
   showLegacy: false, // ayrıntılı (eski) paneller
 };
 
@@ -177,6 +179,7 @@ function onDrawing(d, secs) {
   state.region = null;
   state.mepOverrides = {};
   state.manualWalls = [];
+  state.manualFixtures = []; state.manualOpenings = []; state.manualColumns = [];
   state.systemsOff = new Set();
   state.elevations = null;
   state.ceiling = { cm: 280, source: 'default', text: '' };
@@ -624,6 +627,9 @@ function runDetect() {
     textLayers: state.roles.text, doorLayers: state.roles.door, windowLayers: state.roles.window, region, params: state.params,
     extraWalls: state.manualWalls,
   }))) : emptyModel();
+  // sohbetle eklenen kolon ve boşluklar (duvar kimliği hâlâ varsa) modele katılır
+  state.model.columns.push(...state.manualColumns);
+  state.model.openings.push(...state.manualOpenings.filter((o) => state.model.walls.some((w) => w.id === o.hostWall)));
   state.overrides = {};
   state.selected = null;
   plan.setModel(state.model, state.overrides);
@@ -657,9 +663,9 @@ function runFixtures() {
     all.push(...suffixIds(r.fixtures, i, multi));
     ignored += r.ignored;
   });
-  state.fixtures = all;
+  state.fixtures = all.concat(state.manualFixtures);
   state.decorIgnored = ignored;
-  plan.setFixtures(all);
+  plan.setFixtures(liveFixtures());
 }
 const liveFixtures = () => state.fixtures.map((f) => { const o = state.overrides[f.id]; return o?.kind ? { ...f, kind: o.kind, label: FIXTURE_KINDS[o.kind]?.label || o.kind } : f; });
 
@@ -1288,6 +1294,54 @@ const agentApi = {
     return 'id\tad\tboyut\tnesne\tiçerik\n' + (list.join('\n') || '(tek bölüm)');
   },
   exportIfc: async () => { await exportIfc(); return $('status').textContent || 'IFC hazırlandı'; },
+  addFixtures: ({ kind, room, count, layout, sizeCm, spacingCm, rotDeg, at }) => {
+    const m = state.model, k = 1 / m.unitScale;
+    kind = String(kind || '').toLowerCase();
+    if (!FIXTURE_KINDS[kind] && !SETS[kind]) throw new Error(`bilinmeyen tür: ${kind}. Türler: ${Object.keys(FIXTURE_KINDS).join(', ')}; takımlar: ${Object.keys(SETS).join(', ')}`);
+    const live = liveFixtures().filter((f) => !state.overrides[f.id]?.deleted);
+    // engeller: duvar, kolon, zemindeki tefriş (tavandaki klima / yer süzgeci / radyatör engel değil)
+    const obstacles = [...m.walls.filter((w) => !state.overrides[w.id]?.deleted).map((w) => w.poly), ...m.columns.map((c) => c.poly), ...live.filter((f) => !['ac', 'drain', 'radiator', 'faucet'].includes(f.kind)).map((f) => f.poly)];
+    let res;
+    if (Array.isArray(at) && at.length === 2) res = fixtureAt({ kind, x: +at[0], y: +at[1], sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, rotDeg: +rotDeg || 0, k });
+    else {
+      const r = m.rooms.find((r) => r.id === String(room)) || (room && m.rooms.find((r) => (state.overrides[r.id]?.name ?? r.name ?? '').toLocaleLowerCase('tr') === String(room).toLocaleLowerCase('tr')));
+      if (!r) throw new Error('mahal bulunamadı: ' + room + ' (list_rooms ile kimliğe bak)');
+      res = layoutInRoom({ room: r, kind, count: +count || 0, sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, layout: layout || 'grid', spacingCm: +spacingCm || 60, rotDeg: rotDeg == null ? null : +rotDeg, obstacles, k });
+      if (!res.items.length) throw new Error('mahale sığmadı; daha küçük ölçü, daha az adet ya da başka layout deneyin');
+    }
+    const n0 = state.manualFixtures.length;
+    const added = res.items.map((it, i) => ({ id: 'FM' + (n0 + i + 1), kind: it.kind, label: FIXTURE_KINDS[it.kind]?.label || it.kind, name: 'sohbetle eklendi', poly: it.poly, center: it.center, rot: it.rot, wCm: it.wCm, hCm: it.hCm, l: -1, source: 'manual' }));
+    state.manualFixtures.push(...added);
+    state.fixtures = state.fixtures.concat(added);
+    plan.setFixtures(liveFixtures()); renderStats(); rebuild3d();
+    return `${res.label}: ${res.groups} adet yerleştirildi (${added.length} öğe: ${added.map((f) => f.id).join(', ')})`;
+  },
+  addOpening: ({ wall, kind, widthCm, atCm, heightCm, sillCm }) => {
+    const m = state.model, k = 1 / m.unitScale;
+    const w = m.walls.find((w) => w.id === String(wall));
+    if (!w) throw new Error('duvar bulunamadı: ' + wall + ' (list_walls)');
+    const kd = kind === 'window' ? 'window' : 'door';
+    const o = openingOnWall({ wall: w, kind: kd, widthCm: +widthCm || (kd === 'door' ? 90 : 120), atCm: atCm == null ? null : +atCm, k });
+    o.id = 'OM' + (state.manualOpenings.length + 1);
+    state.manualOpenings.push(o);
+    m.openings.push(o);
+    const patch = {};
+    if (Number.isFinite(+heightCm)) patch.heightCm = +heightCm;
+    if (Number.isFinite(+sillCm)) patch.sillCm = +sillCm;
+    if (Object.keys(patch).length) state.overrides[o.id] = patch;
+    plan.setModel(m, state.overrides); renderStats(); renderTodo(); rebuild3d(); renderSel();
+    return `${o.id}: ${kd === 'door' ? 'kapı' : 'pencere'} ${Math.round(o.width / k)} cm, ${w.id} duvarında (başından ${Math.round(o.span[0] / k)} cm)`;
+  },
+  addColumn: (at, sizeCm, rotDeg) => {
+    if (!Array.isArray(at) || at.length !== 2) throw new Error('at: [x, y] gerekli');
+    const k = 1 / state.model.unitScale;
+    const c = columnAt({ x: +at[0], y: +at[1], sizeCm: Array.isArray(sizeCm) && sizeCm.length ? sizeCm.map(Number) : [40, 40], rotDeg: +rotDeg || 0, k });
+    c.id = 'CM' + (state.manualColumns.length + 1);
+    state.manualColumns.push(c);
+    state.model.columns.push(c);
+    plan.setModel(state.model, state.overrides); renderStats(); rebuild3d();
+    return `${c.id} kolonu eklendi`;
+  },
   show: ({ view, select: sel, tour, panel }) => {
     if (panel === 'advanced' || panel === 'ayrintili') agentUi.toggleLegacy(true);
     if (panel === 'simple' || panel === 'sade') agentUi.toggleLegacy(false);
