@@ -11,7 +11,9 @@ import { makeZip } from './zip.js';
 import { Plan2D, findById, findMepById } from './view2d.js';
 import { buildPrompt, buildSnapshot, parseAnswer } from './ai-prompt.js';
 import { makeTools, runAgent, REVIEW_TASK, errorText } from './agent.js';
-import { layoutInRoom, fixtureAt, openingOnWall, columnAt, SETS } from './manual.js';
+import { layoutInRoom, fixtureAt, openingOnWall, columnAt, SETS, shiftedOpening } from './manual.js';
+import { Library } from './lib.js';
+import { serpentine, gridLines, writeDxf, modelEntities, fixtureEntities, normalizeEntities } from './sketch.js';
 import { readRvt } from './rvt.js';
 import { diagnose, SEV_LABEL } from './diagnose.js';
 import { planTour } from './tour.js';
@@ -35,6 +37,10 @@ const state = {
   tab: 'plan',
   view3d: null,
   kb: new KnowledgeBase(),
+  lib: new Library(), // kalıcı öğe kütüphanesi (tefriş / semboller)
+  unknownBlocks: [],
+  marks: [], // kullanıcı işaretleri: {id:'M1', type:'point'|'rect', x, y, bbox}
+  sketches: [], // sohbetle çizilen 2B varlıklar: {id:'S1', type, layer, system, color, ...}
   planIsland: null,
   islands: [],
   mep: null, // tesisat çıkarımı
@@ -86,6 +92,7 @@ const plan = new Plan2D($('plan'), {
   colors: themeColors,
   onSelect: (id) => select(id),
   onWall: (a, b) => addManualWall(a, b),
+  onMark: (m) => addMark(m),
   onRegion: (r) => { state.region = r; $('btnRegion').classList.remove('on'); status('Bölge seçildi, yeniden algılanıyor…'); runDetect(); },
 });
 
@@ -179,7 +186,8 @@ function onDrawing(d, secs) {
   state.region = null;
   state.mepOverrides = {};
   state.manualWalls = [];
-  state.manualFixtures = []; state.manualOpenings = []; state.manualColumns = [];
+  state.manualFixtures = []; state.manualOpenings = []; state.manualColumns = []; state.overlays = [];
+  state.marks = []; state.sketches = []; plan.marks = []; plan.sketches = []; renderMarkHint();
   state.systemsOff = new Set();
   state.elevations = null;
   state.ceiling = { cm: 280, source: 'default', text: '' };
@@ -206,6 +214,24 @@ function onDrawing(d, secs) {
   renderSide();
   if (state.isSample && !state.demoDone) runDemo();
   else agentUi.autoReview();
+}
+
+// Duvar silindikten sonra: overrides korunarak model yeniden kurulur (mahal grafiği silinen duvarsız hesaplanır)
+function runDetectKeep() {
+  const ov = state.overrides, manual = { f: state.manualFixtures, o: state.manualOpenings, c: state.manualColumns };
+  const deletedWalls = new Set(Object.entries(ov).filter(([id, o]) => o.deleted && id[0] === 'W').map(([id]) => id));
+  runDetect();
+  state.overrides = ov;
+  // yeni modelde aynı kimlikler korunur (algılama deterministik); silinen duvarlar mahal grafiğinden düşürülür
+  if (deletedWalls.size && state.model) {
+    const kept = state.model.walls.filter((w) => !deletedWalls.has(w.id));
+    if (kept.length !== state.model.walls.length) {
+      const m = detect(state.drawing, { units: state.units, wallLayers: state.roles.wall, columnLayers: state.roles.column, textLayers: state.roles.text, doorLayers: state.roles.door, windowLayers: state.roles.window, region: currentRegions()[0], params: state.params, extraWalls: state.manualWalls, dropWalls: deletedWalls });
+      if (m) { state.model = { ...state.model, rooms: m.rooms, outline: m.outline, outlines: m.outline ? [m.outline] : [] }; }
+    }
+  }
+  state.manualFixtures = manual.f; state.manualOpenings = manual.o; state.manualColumns = manual.c;
+  plan.setModel(state.model, state.overrides); plan.setFixtures(liveFixtures()); renderStats(); rebuild3d(); renderSel();
 }
 
 // Sol üst: dosya adı + tek satır özet
@@ -393,14 +419,76 @@ function partStats() {
   const wallRe = /duvar|wall/i;
   for (const isl of list) { isl._w = 0; isl._m = 0; }
   const byArea = list.slice().sort((a, b) => (a.bbox[2] - a.bbox[0]) * (a.bbox[3] - a.bbox[1]) - (b.bbox[2] - b.bbox[0]) * (b.bbox[3] - b.bbox[1]));
+  for (const isl of list) { isl._kot = 0; isl._txt = 0; isl._wb = null; }
   for (const p of d.prims) {
     const x = p.pts[0], y = p.pts[1];
     const isl = byArea.find((i) => x >= i.bbox[0] && x <= i.bbox[2] && y >= i.bbox[1] && y <= i.bbox[3]);
     if (!isl) continue;
-    if (wallRe.test(d.layers[p.l].name)) isl._w++;
+    if (wallRe.test(d.layers[p.l].name)) {
+      isl._w++;
+      const b = isl._wb || (isl._wb = [Infinity, Infinity, -Infinity, -Infinity]);
+      for (let q = 0; q < p.pts.length; q += 2) { b[0] = Math.min(b[0], p.pts[q]); b[1] = Math.min(b[1], p.pts[q + 1]); b[2] = Math.max(b[2], p.pts[q]); b[3] = Math.max(b[3], p.pts[q + 1]); }
+    }
     if (isMep(p.l)) isl._m++;
   }
+  for (const t of d.texts) {
+    const isl = byArea.find((i) => t.x >= i.bbox[0] && t.x <= i.bbox[2] && t.y >= i.bbox[1] && t.y <= i.bbox[3]);
+    if (!isl) continue;
+    isl._txt++;
+    if (/^[+±-]\s?\d{1,2}[.,]\d{2}\b/.test(t.s.trim())) isl._kot++;
+  }
+  // tür tahmini: başlık + içerik
+  const toCm = UNIT_TO_CM[state.units] ?? 1;
+  for (const isl of list) {
+    const L = fold(isl.label || '');
+    const w = (isl.bbox[2] - isl.bbox[0]) * toCm / 100, h = (isl.bbox[3] - isl.bbox[1]) * toCm / 100;
+    let t = 'bilinmiyor';
+    const big = isl._w > 400 || isl._m > 400; // içerik ağır basar: başlık yanıltıcı olabilir (birleşik pafta)
+    if (!big && (/KESIT|SECTION|GORUNUS|ELEVATION|CEPHE|FACADE/.test(L) || (isl._kot >= 3 && isl._w < 50))) t = 'kesit/görünüş';
+    else if (!big && (/LEJANT|LEGEND|SEMBOL|ANTET|NOTLAR|MAHAL LISTESI/.test(L) || (isl._txt > isl.n * 0.5 && isl._w === 0))) t = 'lejant/tablo';
+    else if (!big && /SEMA|SCHEMA|DIAGRAM|KOLON SEMASI|RISER|ISOMETR/.test(L)) t = 'şema';
+    else if (!big && (/DETAY|DETAIL/.test(L) || (Math.max(w, h) < 3 && isl._w > 0))) t = 'detay';
+    else if (/VAZIYET|SITE PLAN/.test(L) || (Math.max(w, h) > 150 && isl._w < 20)) t = 'vaziyet planı';
+    else if (!big && /TAVAN|CEILING|RCP/.test(L)) t = 'tavan planı';
+    else if (!big && /TEFRIS|FURNITURE|MOBILYA/.test(L)) t = 'tefriş planı';
+    else if (/PLAN|KAT\b/.test(L) || isl._w > 50 || isl._m > 50) t = big && Math.max(w, h) > 60 ? 'kat planı (+detay/şema karışık; gerekirse bölge seç)' : 'kat planı';
+    isl._type = t;
+  }
+  // aynı alanın başka çizimi olabilecek benzer boyutlu bölümler (duvar kutusu ya da bölüm kutusu %8 içinde)
+  for (const a of list) {
+    a._similar = [];
+    const ab = a._wb || a.bbox, aw = ab[2] - ab[0], ah = ab[3] - ab[1];
+    for (const b of list) {
+      if (a === b) continue;
+      const bb = b._wb || b.bbox, bw = bb[2] - bb[0], bh = bb[3] - bb[1];
+      if (aw > 0 && bw > 0 && Math.abs(aw - bw) / Math.max(aw, bw) < 0.08 && Math.abs(ah - bh) / Math.max(ah, bh) < 0.08) a._similar.push(b.id);
+    }
+  }
   return list;
+}
+
+// Bir bölümü başka bir bölümün üstüne bindirir (aynı alanın tavan/tefriş/tesisat planı gibi):
+// duvar kutuları (yoksa bölüm kutuları) merkezden hizalanır; çizim nesneleri kaydırılır (geri alınabilir)
+function overlayIsland(baseId, otherId) {
+  const d = state.drawing;
+  const list = partStats();
+  const A = list.find((i) => i.id === baseId), B = list.find((i) => i.id === otherId);
+  if (!A || !B) throw new Error('bölüm bulunamadı');
+  const ab = A._wb || A.bbox, bb = B._wb || B.bbox;
+  const dx = (ab[0] + ab[2]) / 2 - (bb[0] + bb[2]) / 2, dy = (ab[1] + ab[3]) / 2 - (bb[1] + bb[3]) / 2;
+  const inB = (x, y) => x >= B.bbox[0] && x <= B.bbox[2] && y >= B.bbox[1] && y <= B.bbox[3];
+  let n = 0;
+  for (const p of d.prims) { if (!inB(p.pts[0], p.pts[1])) continue; for (let q = 0; q < p.pts.length; q += 2) { p.pts[q] += dx; p.pts[q + 1] += dy; } n++; }
+  for (const t of d.texts) if (inB(t.x, t.y)) { t.x += dx; t.y += dy; }
+  for (const it of d.inserts || []) if (inB(it.x, it.y)) { it.x += dx; it.y += dy; }
+  state.overlays = state.overlays || [];
+  state.overlays.push({ base: baseId, other: otherId, dx, dy, n });
+  B.bbox = [B.bbox[0] + dx, B.bbox[1] + dy, B.bbox[2] + dx, B.bbox[3] + dy];
+  const isl = state.islands.find((i) => i.id === otherId); if (isl) isl.bbox = B.bbox;
+  A.bbox = [Math.min(A.bbox[0], B.bbox[0]), Math.min(A.bbox[1], B.bbox[1]), Math.max(A.bbox[2], B.bbox[2]), Math.max(A.bbox[3], B.bbox[3])];
+  const ia = state.islands.find((i) => i.id === baseId); if (ia) ia.bbox = A.bbox;
+  state._partList = null;
+  return { dx, dy, n };
 }
 
 function renderParts() {
@@ -658,16 +746,24 @@ function runFixtures() {
   const multi = regions.length > 1;
   const all = [];
   let ignored = 0;
+  const unknown = new Map();
   regions.forEach((region, i) => {
-    const r = extractFixtures(d, { region, units: state.units, rooms: state.model.rooms, unitScale: state.model.unitScale, skipLayers: skip });
+    const r = extractFixtures(d, { region, units: state.units, rooms: state.model.rooms, unitScale: state.model.unitScale, skipLayers: skip, lib: state.lib });
     all.push(...suffixIds(r.fixtures, i, multi));
     ignored += r.ignored;
+    for (const u of r.unknown || []) { const c = unknown.get(u.name); if (c) c.count += u.count; else unknown.set(u.name, { ...u }); }
   });
+  state.unknownBlocks = [...unknown.values()].sort((a, b) => b.count - a.count);
   state.fixtures = all.concat(state.manualFixtures);
   state.decorIgnored = ignored;
   plan.setFixtures(liveFixtures());
 }
-const liveFixtures = () => state.fixtures.map((f) => { const o = state.overrides[f.id]; return o?.kind ? { ...f, kind: o.kind, label: FIXTURE_KINDS[o.kind]?.label || o.kind } : f; });
+const liveFixtures = () => state.fixtures.map((f) => {
+  const o = state.overrides[f.id];
+  let g = o?.kind ? { ...f, kind: o.kind, label: FIXTURE_KINDS[o.kind]?.label || o.kind } : f;
+  if (g.lib && !o?.kind) { const li = state.lib.get(g.lib); if (li?.parts) g = { ...g, libParts: li.parts, label: li.label }; }
+  return g;
+});
 
 // ------------------------------------------------------------ tesisat
 const mepCount = () => (state.mep ? state.mep.pipes.length + state.mep.ducts.length + state.mep.boxes.length : 0);
@@ -759,7 +855,8 @@ function buildAll() {
 
 function rebuild3d(keepCamera = true) {
   if (!state.view3d || !state.model) return;
-  state.view3d.setSolids(buildAll().solids, { keepCamera });
+  const b = buildAll();
+  state.view3d.setSolids(b.solids.concat(sketchSolids(b.origin, b.scale)), { keepCamera });
   state.view3d.setVisibility({ arch: state.archVisible, systems: visibleSystems() });
   state.view3d.setSelected(state.selected);
 }
@@ -1189,6 +1286,52 @@ $('answerIn').addEventListener('paste', () => setTimeout(() => {
   $('answerIn').oninput();
   if (state.drawing && /\{[\s\S]*\}/.test($('answerIn').value)) applyAnswer();
 }, 0));
+// ------------------------------------------------------------ işaretler ve eskizler
+function roomAt(x, y) { return state.model?.rooms.find((r) => !state.overrides[r.id]?.deleted && pointInPoly(x, y, r.poly)) || null; }
+function addMark(m) {
+  const id = 'M' + (state.marks.length + 1);
+  const mk = { id, ...m };
+  state.marks.push(mk);
+  plan.marks = state.marks; plan.draw();
+  renderMarkHint();
+  const c = m.type === 'rect' ? [(m.bbox[0] + m.bbox[2]) / 2, (m.bbox[1] + m.bbox[3]) / 2] : [m.x, m.y];
+  const r = roomAt(c[0], c[1]);
+  const inp = $('chatIn');
+  inp.value = (inp.value ? inp.value.trimEnd() + ' ' : '') + `[${id}${r ? ' · ' + (state.overrides[r.id]?.name ?? r.name ?? r.id) : ''}] `;
+  inp.focus();
+  ['btnMarkPoint', 'btnMarkRect'].forEach((b) => $(b).classList.remove('on'));
+}
+function renderMarkHint() {
+  $('btnMarkClear').hidden = !state.marks.length;
+  $('markHint').textContent = state.marks.length ? state.marks.map((m) => `${m.id}: ${m.type === 'rect' ? 'alan' : 'nokta'}${(() => { const c = m.type === 'rect' ? [(m.bbox[0] + m.bbox[2]) / 2, (m.bbox[1] + m.bbox[3]) / 2] : [m.x, m.y]; const r = roomAt(c[0], c[1]); return r ? ' · ' + (state.overrides[r.id]?.name ?? r.name ?? r.id) : ''; })()}`).join(' · ') : '';
+}
+$('btnMarkPoint').onclick = () => { showTab('plan'); plan.markMode = plan.markMode === 'point' ? null : 'point'; plan.regionMode = false; $('btnMarkPoint').classList.toggle('on', plan.markMode === 'point'); $('btnMarkRect').classList.remove('on'); status(plan.markMode ? 'Planda bir noktaya tıklayın; işaret sohbete eklenir.' : ''); };
+$('btnMarkRect').onclick = () => { showTab('plan'); plan.markMode = plan.markMode === 'rect' ? null : 'rect'; plan.regionMode = false; $('btnMarkRect').classList.toggle('on', plan.markMode === 'rect'); $('btnMarkPoint').classList.remove('on'); status(plan.markMode ? 'Planda sürükleyerek bir alan seçin; işaret sohbete eklenir.' : ''); };
+$('btnMarkClear').onclick = () => { state.marks = []; plan.marks = []; plan.draw(); renderMarkHint(); };
+const SYS_COLOR = (sys) => (SYSTEMS[sys] || null)?.color;
+function addSketches(list, { layer, system, widthCm, label }) {
+  const n0 = state.sketches.length;
+  const color = SYS_COLOR(system) || '#c2185b';
+  const added = list.map((e, i) => ({ ...e, id: 'S' + (n0 + i + 1), layer: e.layer || layer || 'ESKIZ', system: system || null, color, width: widthCm ? widthCm / state.model.unitScale : 0, label: label || '' }));
+  state.sketches.push(...added);
+  plan.sketches = state.sketches; plan.draw();
+  rebuild3d();
+  return added;
+}
+// Eskiz geometrisini metre cinsinden 3B boru yoluna çevirir (system verilmişse)
+function sketchSolids(origin, scale) {
+  const out = [];
+  const tr = (p) => [(p[0] - origin[0]) * scale, (p[1] - origin[1]) * scale];
+  for (const e of state.sketches) {
+    if (!e.system || e.hidden) continue;
+    const z = 0.03;
+    const r = Math.max((e.width || 0) * scale / 2, 0.008);
+    if (e.type === 'polyline') out.push({ type: 'pipe', id: e.id, src: e.id, system: e.system, name: e.label || e.layer, path: e.pts.map((p) => [...tr(p), z]), r, props: { layer: e.layer, lengthM: 0 } });
+    else if (e.type === 'line') out.push({ type: 'pipe', id: e.id, src: e.id, system: e.system, name: e.label || e.layer, path: [[...tr([e.pts[0], e.pts[1]]), z], [...tr([e.pts[2], e.pts[3]]), z]], r, props: { layer: e.layer } });
+  }
+  return out;
+}
+
 // ------------------------------------------------------------ Claude ajan modu (abonelik, anahtarsız)
 // Sayfanın araçlara açtığı fonksiyonlar: küçük düz metin / veri döndürür
 const fmtRoom = (r) => `${r.id}\t${(Math.abs(r.area) * state.model.unitScale ** 2 / 1e4).toFixed(1)} m²\t${state.overrides[r.id]?.name ?? r.name ?? ''}`;
@@ -1265,6 +1408,8 @@ const agentApi = {
   deleteElements: (ids) => {
     const ok = [], bad = [];
     for (const id of ids) {
+      const sk = state.sketches.find((e) => e.id === id);
+      if (sk) { sk.hidden = true; ok.push(id); plan.draw(); continue; }
       if (findById(state.model, id) || state.fixtures.some((f) => f.id === id)) { state.overrides[id] = { ...(state.overrides[id] || {}), deleted: true }; ok.push(id); } else bad.push(id);
     }
     plan.setModel(state.model, state.overrides); plan.setFixtures(liveFixtures()); renderStats(); renderTodo(); rebuild3d(); renderSel();
@@ -1284,33 +1429,220 @@ const agentApi = {
     return `duvar eklendi; mahal sayısı ${before} → ${state.model.rooms.length}`;
   },
   setParts: (ids) => {
-    const list = partStats().map((i) => `${i.id}\t${i.label || 'Bölüm ' + i.id}\t${Math.round((i.bbox[2] - i.bbox[0]) * (UNIT_TO_CM[state.units] ?? 1) / 100)}×${Math.round((i.bbox[3] - i.bbox[1]) * (UNIT_TO_CM[state.units] ?? 1) / 100)} m\t${i.n} nesne\tduvar çizgisi ${i._w}, tesisat ${i._m}${state.parts?.includes(i.id) || state.planIsland?.id === i.id ? '\t(seçili)' : ''}`);
+    const list = partStats().map((i) => `${i.id}\t${i.label || 'Bölüm ' + i.id}\t${i._type}\t${Math.round((i.bbox[2] - i.bbox[0]) * (UNIT_TO_CM[state.units] ?? 1) / 100)}×${Math.round((i.bbox[3] - i.bbox[1]) * (UNIT_TO_CM[state.units] ?? 1) / 100)} m\t${i.n} nesne\tduvar çizgisi ${i._w}, tesisat ${i._m}, kot yazısı ${i._kot}${i._similar.length ? '\tbenzer boyut: ' + i._similar.join(',') + ' (aynı alanın başka çizimi olabilir → overlay_parts)' : ''}${state.parts?.includes(i.id) || state.planIsland?.id === i.id ? '\t(seçili)' : ''}`);
     if (ids && ids.length) {
       const valid = ids.map(Number).filter((id) => state.islands.some((i) => i.id === id));
       if (!valid.length) throw new Error('geçerli bölüm kimliği yok');
       state.parts = valid; processParts(valid);
       return `${valid.length} bölüm işleniyor: ${valid.join(', ')} (algılama yenilendi; listeleri tekrar oku)`;
     }
-    return 'id\tad\tboyut\tnesne\tiçerik\n' + (list.join('\n') || '(tek bölüm)');
+    return 'id\tad\ttür tahmini\tboyut\tnesne\tiçerik\n' + (list.join('\n') || '(tek bölüm)');
+  },
+  readPart: (id) => {
+    const d = state.drawing;
+    const isl = partStats().find((i) => i.id === Number(id));
+    if (!isl) throw new Error('bölüm bulunamadı: ' + id);
+    const inB = (x, y) => x >= isl.bbox[0] && x <= isl.bbox[2] && y >= isl.bbox[1] && y <= isl.bbox[3];
+    const texts = d.texts.filter((t) => inB(t.x, t.y));
+    const kots = [...new Set(texts.map((t) => t.s.trim().match(/^([+±-])\s?(\d{1,2})[.,](\d{2})\b/)).filter(Boolean).map((m) => (m[1] === '-' ? -1 : 1) * (+m[2] + +m[3] / 100)))].sort((a, b) => a - b);
+    const diffs = []; for (let i = 1; i < kots.length; i++) diffs.push(`${kots[i - 1].toFixed(2)}→${kots[i].toFixed(2)} = ${Math.round((kots[i] - kots[i - 1]) * 100)} cm`);
+    const nums = texts.map((t) => t.s.trim()).filter((x) => /^\d{2,4}$/.test(x)).map(Number).filter((v) => v >= 20 && v <= 600);
+    const numFreq = [...nums.reduce((m, v) => m.set(v, (m.get(v) || 0) + 1), new Map())].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([v, c]) => `${v}(${c})`);
+    const layers = new Map();
+    for (const p of d.prims) if (inB(p.pts[0], p.pts[1])) layers.set(p.l, (layers.get(p.l) || 0) + 1);
+    const lrows = [...layers].sort((a, b) => b[1] - a[1]).slice(0, 25).map(([l, c]) => `${d.layers[l].name} ${c}`);
+    const words = [...new Set(texts.filter((t) => /\p{L}{3}/u.test(t.s)).sort((a, b) => b.h - a.h).map((t) => t.s.trim().slice(0, 50)))].slice(0, 60);
+    const toCm = UNIT_TO_CM[state.units] ?? 1;
+    return `BÖLÜM ${isl.id}: ${isl.label || '-'} · tür tahmini: ${isl._type} · ${Math.round((isl.bbox[2] - isl.bbox[0]) * toCm / 100)}×${Math.round((isl.bbox[3] - isl.bbox[1]) * toCm / 100)} m · ${isl.n} nesne · duvar çizgisi ${isl._w}, tesisat ${isl._m}
+Kot yazıları (m): ${kots.map((v) => v.toFixed(2)).join(', ') || '-'}
+Kot farkları: ${diffs.join('; ') || '-'}   (kesit/görünüşte kat yüksekliği, parapet, kapı/pencere üstü buradan okunur)
+Sık geçen sayılar (ölçü yazıları, cm?): ${numFreq.join(' ') || '-'}
+Yazılar: ${words.join(' | ') || '-'}
+Katmanlar: ${lrows.join(', ')}
+Benzer boyutlu bölümler: ${isl._similar.join(', ') || '-'}`;
+  },
+  overlayParts: (base, others) => {
+    const res = [];
+    for (const o of others) { const r = overlayIsland(Number(base), Number(o)); res.push(`${o} → ${base}: ${r.n} nesne kaydırıldı (dx ${r.dx.toFixed(1)}, dy ${r.dy.toFixed(1)})`); }
+    state.parts = [Number(base)];
+    processParts(state.parts);
+    return res.join('\n') + '\n(bölüm ' + base + ' yeniden işleniyor; listeleri tekrar oku. Tesisat/tavan/tefriş çizimi artık plana bindirildi.)';
   },
   exportIfc: async () => { await exportIfc(); return $('status').textContent || 'IFC hazırlandı'; },
+  marks: (clear) => {
+    if (clear) { state.marks = []; plan.marks = []; plan.draw(); renderMarkHint(); return 'işaretler temizlendi'; }
+    if (!state.marks.length) return 'işaret yok (kullanıcı 📍 Nokta / ▭ Alan düğmeleriyle koyar)';
+    return 'id\ttür\tkonum (çizim koordinatı)\tmahal\n' + state.marks.map((m) => { const c = m.type === 'rect' ? [(m.bbox[0] + m.bbox[2]) / 2, (m.bbox[1] + m.bbox[3]) / 2] : [m.x, m.y]; const r = roomAt(c[0], c[1]); return `${m.id}\t${m.type === 'rect' ? 'alan' : 'nokta'}\t${m.type === 'rect' ? '[' + m.bbox.map((v) => v.toFixed(0)).join(', ') + ']' : '(' + m.x.toFixed(0) + ', ' + m.y.toFixed(0) + ')'}\t${r ? r.id + ' ' + (state.overrides[r.id]?.name ?? r.name ?? '') : '-'}`; }).join('\n');
+  },
+  listSketches: () => (state.sketches.length ? 'id\ttür\tkatman\tsistem\tözet\n' + state.sketches.map((e) => `${e.id}\t${e.type}\t${e.layer}\t${e.system || '-'}\t${e.type === 'polyline' ? e.pts.length + ' nokta' : e.type === 'text' ? e.text : ''}${e.label ? ' · ' + e.label : ''}`).join('\n') : '(eskiz yok)'),
+  // M1 / [x,y] -> nokta; mahal: R.. ya da alan işareti
+  _point: (v) => { if (Array.isArray(v) && v.length === 2) return [+v[0], +v[1]]; const m = state.marks.find((m) => m.id === String(v)); if (!m) return null; return m.type === 'rect' ? [(m.bbox[0] + m.bbox[2]) / 2, (m.bbox[1] + m.bbox[3]) / 2] : [m.x, m.y]; },
+  _area: (room, mark) => {
+    if (mark) { const m = state.marks.find((m) => m.id === String(mark)); if (!m) throw new Error('işaret bulunamadı: ' + mark); if (m.type === 'rect') return { poly: [[m.bbox[0], m.bbox[1]], [m.bbox[2], m.bbox[1]], [m.bbox[2], m.bbox[3]], [m.bbox[0], m.bbox[3]]], name: m.id }; const r = roomAt(m.x, m.y); if (!r) throw new Error(m.id + ' bir mahalin içinde değil'); return { poly: r.poly, name: r.id }; }
+    const r = state.model.rooms.find((r) => r.id === String(room)) || (room && state.model.rooms.find((r) => (state.overrides[r.id]?.name ?? r.name ?? '').toLocaleLowerCase('tr') === String(room).toLocaleLowerCase('tr')));
+    if (!r) throw new Error('mahal bulunamadı: ' + room);
+    return { poly: r.poly, name: r.id };
+  },
+  draw: ({ entities, pattern, room, mark, pitchCm, spacingCm, marginCm, startAt, layer, system, widthCm, label }) => {
+    const k = 1 / state.model.unitScale;
+    if (pattern) {
+      const area = agentApi._area(room, mark);
+      const L = layer || (pattern === 'serpentine' ? 'M-YERDEN ISITMA' : 'ESKIZ');
+      if (pattern === 'serpentine') {
+        const sp = serpentine({ poly: area.poly, pitchCm: +pitchCm || 15, marginCm: marginCm == null ? 25 : +marginCm, k, startNear: startAt ? agentApi._point(startAt) : null });
+        if (!sp) throw new Error('alan serpantin için çok küçük');
+        const added = addSketches([{ type: 'polyline', pts: sp.pts, closed: false, layer: L }], { layer: L, system: system || 'heating', widthCm: widthCm || 1.6, label: label || `Serpantin ${area.name}` });
+        return `${added[0].id}: ${area.name} içinde serpantin, ${sp.rows} sıra, boru boyu ≈ ${(sp.lengthCm / 100).toFixed(1)} m, aralık ${+pitchCm || 15} cm, katman ${L}`;
+      }
+      if (pattern === 'grid') {
+        const lines = gridLines({ poly: area.poly, spacingCm: +spacingCm || 60, k, marginCm: +marginCm || 0 });
+        const added = addSketches(lines.map((pts) => ({ type: 'line', pts, layer: L })), { layer: L, system: system || null, widthCm, label });
+        return `${added.length} ızgara çizgisi (${+spacingCm || 60} cm) ${area.name} içinde, katman ${L}`;
+      }
+      throw new Error('pattern serpentine | grid olmalı');
+    }
+    const list = normalizeEntities(entities, layer || 'ESKIZ');
+    if (!list.length) throw new Error('geçerli varlık yok (type line/polyline/circle/arc/text ve koordinatlar)');
+    const added = addSketches(list, { layer, system, widthCm, label });
+    return `${added.length} varlık çizildi (${added[0].id}…${added[added.length - 1].id}), katman ${layer || 'ESKIZ'}${system ? ', 3B boru: ' + system : ''}`;
+  },
+  exportDxf: async (include) => {
+    const ents = state.sketches.filter((e) => !e.hidden).map(({ id, system, color, width, label, hidden, ...e }) => ({ ...e, width }));
+    if (include === 'model' || include === 'all') { ents.push(...modelEntities(state.model, state.overrides)); ents.push(...fixtureEntities(liveFixtures(), state.overrides)); }
+    if (!ents.length) throw new Error('çizilecek bir şey yok (önce draw ile çizin ya da include model)');
+    const layers = [...new Set(ents.map((e) => e.layer))].map((name, i) => ({ name, color: [1, 3, 5, 2, 4, 6, 30, 7][i % 8] }));
+    const dxf = writeDxf(ents, { layers, unitCode: state.units || 5 });
+    const name = baseName() + '-cizim';
+    const dl = await capDownloads;
+    if (dl) { const zip = makeZip([{ name: name + '.dxf', data: new TextEncoder().encode(dxf) }]); await dl.save({ filename: name + '.zip', data: zip }); return `${name}.zip indirildi (içinde ${name}.dxf; AutoCAD'de açıp DWG olarak kaydedin). ${ents.length} varlık, ${layers.length} katman.`; }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([dxf], { type: 'application/dxf' })); a.download = name + '.dxf'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    return `${name}.dxf indirildi (${ents.length} varlık, ${layers.length} katman)`;
+  },
+  listUnknown: () => {
+    const ub = state.unknownBlocks.map((u) => `${u.name}\t${u.count} adet\t${Math.round(u.wCm)}×${Math.round(u.hCm)} cm\tkatman: ${u.layer}`);
+    const ul = state.mepStats.filter((st) => { const p = state.mepProfiles.get(st.l); return p?.unknown && !p.kind; }).map((st) => `${st.name}\t${st.count} nesne, ${st.lengthM} m, tipik ${st.typicalCm} cm${st.blocks?.length ? '\tbloklar: ' + st.blocks.join(', ') : ''}`);
+    const lib = state.lib.list().map((i) => `${i.name}\t${i.label}\t${i.kind}\t${i.sizeCm.join('×')} cm\t${(i.aliases || []).join(' | ') || '-'}`);
+    return `TANINMAYAN BLOKLAR (ad, adet, ölçü, katman)\n${ub.join('\n') || '(yok)'}\n\nPROFİLİ BİLİNMEYEN TESİSAT KATMANLARI\n${ul.join('\n') || '(yok)'}\n\nKÜTÜPHANE (ad, etiket, tür, ölçü, takma adlar)\n${lib.join('\n') || '(boş)'}`;
+  },
+  libraryAdd: (def) => {
+    const rec = state.lib.add(def, 'ai');
+    if (!rec) throw new Error('geçersiz tanım: name ve geçerli bir kind gerekli (tefriş türü, ignore, note [text], recipe [text])');
+    if (rec.kind === 'note' || rec.kind === 'recipe') return `belleğe kaydedildi: ${rec.name} (${rec.kind}, ${rec.text.length} karakter${rec.tags.length ? ', etiketler: ' + rec.tags.join(', ') : ''})`;
+    runFixtures(); renderStats(); rebuild3d();
+    return `kütüphaneye eklendi: ${rec.name} (${rec.label}, ${rec.kind}, ${rec.sizeCm.join('×')} cm${rec.aliases.length ? ', takma ad ' + rec.aliases.length : ''}${rec.parts ? ', ' + rec.parts.length + ' parça' : ''}); projede yeniden tarandı: ${state.fixtures.length} tefriş`;
+  },
+  library: (remove, filter = '') => {
+    if (remove) { const ok = state.lib.remove(remove); if (ok) { runFixtures(); renderStats(); rebuild3d(); } return ok ? remove + ' silindi' : remove + ' bulunamadı'; }
+    const f = filter.toLowerCase();
+    const fx = state.lib.fixtures().filter((i) => !f || (i.name + ' ' + i.label + ' ' + (i.aliases || []).join(' ')).toLowerCase().includes(f));
+    const notes = state.lib.notes(filter);
+    const st = state.lib.stats();
+    return `KÜTÜPHANE (${st.items} kayıt${st.shared ? ', paylaşımlı depo açık' : ', yalnız bu tarayıcı'})\nTEFRİŞ / SEMBOL (ad, etiket, tür, ölçü, takma adlar, not)\n` + (fx.map((i) => `${i.name}\t${i.label}\t${i.kind}\t${i.sizeCm.join('×')}\t${(i.aliases || []).join(' | ') || '-'}\t${i.note || ''}`).join('\n') || '(yok)') + '\n\nNOTLAR / TARİFLER (ad, etiket, etiketler, metin)\n' + (notes.map((i) => `${i.name}\t${i.label}\t[${(i.tags || []).join(', ')}]\t${i.text.slice(0, 400)}${i.params ? '\tparams: ' + JSON.stringify(i.params).slice(0, 200) : ''}`).join('\n') || '(yok)');
+  },
+  edit: (inp) => {
+    const id = String(inp.id || '');
+    if (id[0] === 'O') return agentApi.editOpening(inp);
+    if (/^[WCG]/.test(id)) return agentApi.editWall(inp);
+    if (id[0] === 'F') {
+      if (inp.delete) return agentApi.deleteElements([id]);
+      if (inp.kind) { const li = state.lib.get(String(inp.kind).toLowerCase()); return agentApi.setFixture(id, li ? li.kind : String(inp.kind)); }
+      return 'değişiklik yok';
+    }
+    if (id[0] === 'R') { if (inp.delete) return agentApi.deleteElements([id]); return 'mahal adı için apply.rooms kullanın'; }
+    if (id[0] === 'S') { if (inp.delete) return agentApi.deleteElements([id]); return 'eskiz için yalnız silme desteklenir'; }
+    throw new Error('bilinmeyen kimlik: ' + id);
+  },
+  addStructure: (inp) => {
+    const t = String(inp.type || '').toLowerCase();
+    if (t === 'door' || t === 'window') return agentApi.addOpening({ ...inp, kind: t });
+    if (t === 'wall') return agentApi.addWall(+inp.x1, +inp.y1, +inp.x2, +inp.y2, inp.thicknessCm ? +inp.thicknessCm : 10);
+    if (t === 'column') return agentApi.addColumn(inp.at, inp.sizeCm, inp.rotDeg);
+    throw new Error('type door | window | wall | column olmalı');
+  },
+  editOpening: ({ id, kind, widthCm, heightCm, sillCm, shiftCm, toWall, atCm, delete: del }) => {
+    const m = state.model, k = 1 / m.unitScale;
+    const o = m.openings.find((x) => x.id === String(id));
+    if (!o) throw new Error('boşluk bulunamadı: ' + id);
+    const out = [];
+    if (del) { setOv(o.id, { deleted: true }); return o.id + ' silindi'; }
+    if (shiftCm != null || toWall) {
+      const host = m.walls.find((w) => w.id === (toWall ? String(toWall) : o.hostWall));
+      if (!host) throw new Error('hedef duvar bulunamadı (hostWall yok; toWall ile duvar ver)');
+      const n = toWall ? openingOnWall({ wall: host, kind: kind || effKind(o), widthCm: +widthCm || o.width / k, atCm: atCm == null ? null : +atCm, k })
+        : shiftedOpening({ opening: { ...o, kind: kind || effKind(o) }, wall: host, shiftCm: +shiftCm || 0, widthCm: +widthCm || null, k });
+      n.id = 'OM' + (state.manualOpenings.length + 1);
+      state.manualOpenings.push(n); m.openings.push(n);
+      const old = state.overrides[o.id] || {};
+      if (o.manual) { state.manualOpenings = state.manualOpenings.filter((x) => x.id !== o.id); m.openings.splice(m.openings.indexOf(o), 1); }
+      else state.overrides[o.id] = { ...old, kind: 'solid' }; // eski yer duvarla dolar
+      const patch = {};
+      if (Number.isFinite(+heightCm)) patch.heightCm = +heightCm; else if (old.heightCm) patch.heightCm = old.heightCm;
+      if (Number.isFinite(+sillCm)) patch.sillCm = +sillCm; else if (old.sillCm) patch.sillCm = old.sillCm;
+      if (Object.keys(patch).length) state.overrides[n.id] = patch;
+      plan.setModel(m, state.overrides); renderStats(); renderTodo(); rebuild3d(); renderSel();
+      return `${o.id} → ${n.id}: ${n.kind} ${Math.round(n.width / k)} cm, ${host.id} duvarında başından ${Math.round(n.span[0] / k)} cm (eski yer ${o.manual ? 'kaldırıldı' : 'duvarla dolduruldu'})`;
+    }
+    const patch = {};
+    if (kind && ['door', 'window', 'empty', 'solid'].includes(kind)) { patch.kind = kind; out.push('tür ' + kind); }
+    if (Number.isFinite(+heightCm)) { patch.heightCm = +heightCm; out.push('yükseklik ' + heightCm); }
+    if (Number.isFinite(+sillCm)) { patch.sillCm = +sillCm; out.push('parapet ' + sillCm); }
+    if (Number.isFinite(+widthCm) && +widthCm > 0 && Math.abs(+widthCm - o.width / k) > 1) {
+      // genişlik: aynı duvarda, aynı merkezde yeniden aç (algılanmış boşluk dolar)
+      const host = m.walls.find((w) => w.id === o.hostWall);
+      if (!host) throw new Error('genişlik için ana duvar bulunamadı; toWall ile verin');
+      const n = shiftedOpening({ opening: { ...o, kind: patch.kind || effKind(o) }, wall: host, shiftCm: 0, widthCm: +widthCm, k });
+      n.id = 'OM' + (state.manualOpenings.length + 1); state.manualOpenings.push(n); m.openings.push(n);
+      if (o.manual) { state.manualOpenings = state.manualOpenings.filter((x) => x.id !== o.id); m.openings.splice(m.openings.indexOf(o), 1); } else state.overrides[o.id] = { ...(state.overrides[o.id] || {}), kind: 'solid' };
+      state.overrides[n.id] = patch; plan.setModel(m, state.overrides); renderStats(); renderTodo(); rebuild3d(); renderSel();
+      return `${o.id} → ${n.id}: genişlik ${widthCm} cm`;
+    }
+    if (!Object.keys(patch).length) return 'değişiklik yok';
+    setOv(o.id, patch);
+    return `${o.id}: ${out.join(', ')}`;
+  },
+  editWall: ({ id, heightCm, delete: del, exterior }) => {
+    const el = findById(state.model, String(id));
+    if (!el || !/^[WCG]/.test(String(id))) throw new Error('duvar/kolon/cam cephe bulunamadı: ' + id);
+    if (del) {
+      // elle eklenen kolon ise listeden de çıkar
+      state.manualColumns = state.manualColumns.filter((c) => c.id !== el.id);
+      setOv(el.id, { deleted: true });
+      if (el.id[0] === 'W') { state.model = { ...state.model }; runDetectKeep(); }
+      return el.id + ' kaldırıldı';
+    }
+    const patch = {};
+    if (Number.isFinite(+heightCm)) patch.heightCm = +heightCm;
+    if (typeof exterior === 'boolean') { el.exterior = exterior; }
+    setOv(el.id, patch);
+    return `${el.id} güncellendi`;
+  },
+  resetProject: () => {
+    state.manualFixtures = []; state.manualOpenings = []; state.manualColumns = []; state.manualWalls = []; state.mepOverrides = {}; state.aiTour = null;
+    for (const ov of (state.overlays || []).reverse()) { const B = state.islands.find((i) => i.id === ov.other); const inB = (x, y) => B && x >= B.bbox[0] && x <= B.bbox[2] && y >= B.bbox[1] && y <= B.bbox[3]; for (const p of state.drawing.prims) if (inB(p.pts[0], p.pts[1])) for (let q = 0; q < p.pts.length; q += 2) { p.pts[q] -= ov.dx; p.pts[q + 1] -= ov.dy; } for (const t of state.drawing.texts) if (inB(t.x, t.y)) { t.x -= ov.dx; t.y -= ov.dy; } if (B) B.bbox = [B.bbox[0] - ov.dx, B.bbox[1] - ov.dy, B.bbox[2] - ov.dx, B.bbox[3] - ov.dy]; }
+    state.overlays = []; state._partList = null;
+    runDetect();
+    return 'proje baştan algılandı; tüm düzenlemeler geri alındı';
+  },
   addFixtures: ({ kind, room, count, layout, sizeCm, spacingCm, rotDeg, at }) => {
     const m = state.model, k = 1 / m.unitScale;
     kind = String(kind || '').toLowerCase();
-    if (!FIXTURE_KINDS[kind] && !SETS[kind]) throw new Error(`bilinmeyen tür: ${kind}. Türler: ${Object.keys(FIXTURE_KINDS).join(', ')}; takımlar: ${Object.keys(SETS).join(', ')}`);
+    const li = state.lib.get(kind);
+    if (!FIXTURE_KINDS[kind] && !SETS[kind] && !(li && li.kind !== 'ignore')) throw new Error(`bilinmeyen tür: ${kind}. Türler: ${Object.keys(FIXTURE_KINDS).join(', ')}; takımlar: ${Object.keys(SETS).join(', ')}; kütüphane: ${state.lib.list().map((i) => i.name).join(', ') || '-'}`);
     const live = liveFixtures().filter((f) => !state.overrides[f.id]?.deleted);
     // engeller: duvar, kolon, zemindeki tefriş (tavandaki klima / yer süzgeci / radyatör engel değil)
     const obstacles = [...m.walls.filter((w) => !state.overrides[w.id]?.deleted).map((w) => w.poly), ...m.columns.map((c) => c.poly), ...live.filter((f) => !['ac', 'drain', 'radiator', 'faucet'].includes(f.kind)).map((f) => f.poly)];
     let res;
-    if (Array.isArray(at) && at.length === 2) res = fixtureAt({ kind, x: +at[0], y: +at[1], sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, rotDeg: +rotDeg || 0, k });
+    if (typeof at === 'string' && /^M\d+$/.test(at)) at = agentApi._point(at);
+    if (!at && room && /^M\d+$/.test(String(room))) { const m = state.marks.find((m) => m.id === room); if (m?.type === 'point') at = [m.x, m.y]; else if (m) { const c = agentApi._point(room); const r = roomAt(c[0], c[1]); if (r) room = r.id; } }
+    if (Array.isArray(at) && at.length === 2) res = fixtureAt({ kind, x: +at[0], y: +at[1], sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, rotDeg: +rotDeg || 0, k, lib: state.lib });
     else {
       const r = m.rooms.find((r) => r.id === String(room)) || (room && m.rooms.find((r) => (state.overrides[r.id]?.name ?? r.name ?? '').toLocaleLowerCase('tr') === String(room).toLocaleLowerCase('tr')));
       if (!r) throw new Error('mahal bulunamadı: ' + room + ' (list_rooms ile kimliğe bak)');
-      res = layoutInRoom({ room: r, kind, count: +count || 0, sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, layout: layout || 'grid', spacingCm: +spacingCm || 60, rotDeg: rotDeg == null ? null : +rotDeg, obstacles, k });
+      res = layoutInRoom({ room: r, kind, count: +count || 0, sizeCm: Array.isArray(sizeCm) && sizeCm.length === 2 ? sizeCm.map(Number) : null, layout: layout || 'grid', spacingCm: +spacingCm || 60, rotDeg: rotDeg == null ? null : +rotDeg, obstacles, k, lib: state.lib });
       if (!res.items.length) throw new Error('mahale sığmadı; daha küçük ölçü, daha az adet ya da başka layout deneyin');
     }
     const n0 = state.manualFixtures.length;
-    const added = res.items.map((it, i) => ({ id: 'FM' + (n0 + i + 1), kind: it.kind, label: FIXTURE_KINDS[it.kind]?.label || it.kind, name: 'sohbetle eklendi', poly: it.poly, center: it.center, rot: it.rot, wCm: it.wCm, hCm: it.hCm, l: -1, source: 'manual' }));
+    const added = res.items.map((it, i) => ({ id: 'FM' + (n0 + i + 1), kind: it.kind, label: it.lib ? (state.lib.get(it.lib)?.label || it.lib) : (FIXTURE_KINDS[it.kind]?.label || it.kind), name: it.lib ? 'kütüphane: ' + it.lib : 'sohbetle eklendi', poly: it.poly, center: it.center, rot: it.rot, wCm: it.wCm, hCm: it.hCm, l: -1, source: 'manual', lib: it.lib }));
     state.manualFixtures.push(...added);
     state.fixtures = state.fixtures.concat(added);
     plan.setFixtures(liveFixtures()); renderStats(); rebuild3d();
@@ -1333,7 +1665,8 @@ const agentApi = {
     return `${o.id}: ${kd === 'door' ? 'kapı' : 'pencere'} ${Math.round(o.width / k)} cm, ${w.id} duvarında (başından ${Math.round(o.span[0] / k)} cm)`;
   },
   addColumn: (at, sizeCm, rotDeg) => {
-    if (!Array.isArray(at) || at.length !== 2) throw new Error('at: [x, y] gerekli');
+    if (typeof at === 'string') at = agentApi._point(at);
+    if (!Array.isArray(at) || at.length !== 2) throw new Error('at: [x, y] ya da M.. işareti gerekli');
     const k = 1 / state.model.unitScale;
     const c = columnAt({ x: +at[0], y: +at[1], sizeCm: Array.isArray(sizeCm) && sizeCm.length ? sizeCm.map(Number) : [40, 40], rotDeg: +rotDeg || 0, k });
     c.id = 'CM' + (state.manualColumns.length + 1);
@@ -1352,32 +1685,46 @@ const agentApi = {
   },
 };
 
+// hata ayıklama / test: sayfa API'si (konsoldan dwg2bim.api.listRooms() gibi)
+window.dwg2bim = { api: agentApi, state };
+
 const agentUi = (() => {
   let sample = null, tools = null, busy = false, ctl = null;
   const log = $('chatLog');
   const addMsg = (cls, text) => { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; };
   const setBusy = (b) => { busy = b; $('agentReview').disabled = b || !state.drawing; $('chatSend').disabled = b || !state.drawing; $('agentStop').hidden = !b; };
   // araç çağrılarını günlüğe yaz
+  // araç çağrıları: cevap balonunun üstünde tek katlanır satır ("⚙ 5 işlem"), açılınca ayrıntı
+  let group = null;
+  const toolLine = (text) => {
+    if (!group) { group = document.createElement('details'); group.className = 'tools'; group.innerHTML = '<summary></summary>'; log.insertBefore(group, log.lastElementChild); }
+    const d = document.createElement('div'); d.textContent = text; group.appendChild(d);
+    group.querySelector('summary').textContent = `${group.children.length - 1} işlem`;
+    log.scrollTop = log.scrollHeight;
+    return d;
+  };
   const wrapTools = (list) => list.map((t) => ({ ...t, execute: async (input, cx) => {
-    const line = addMsg('tool', `${t.name}${input && Object.keys(input).length ? ' ' + JSON.stringify(input).slice(0, 160) : ''} …`);
-    try { const r = await t.execute(input, cx); line.textContent = `${t.name}: ${String(typeof r === 'string' ? r : JSON.stringify(r)).split('\n')[0].slice(0, 160)}`; return r; }
+    const line = toolLine(`${t.name}${input && Object.keys(input).length ? ' ' + JSON.stringify(input).slice(0, 120) : ''} …`);
+    try { const r = await t.execute(input, cx); line.textContent = `${t.name}: ${String(typeof r === 'string' ? r : JSON.stringify(r)).split('\n')[0].slice(0, 140)}`; return r; }
     catch (e) { line.textContent = `${t.name}: hata — ${e.message}`; line.classList.add('err'); throw e; }
   } }));
   async function run(message, { tier = 'default', shown = message } = {}) {
     if (!sample || busy || !state.drawing) return null;
     setBusy(true);
     addMsg('user', shown);
-    const out = addMsg('ai', 'Düşünüyor…');
+    group = null;
+    const out = addMsg('ai thinking', 'Düşünüyor…');
     setStatus($('agentStatus'), tier === 'complex' ? 'Claude projeyi inceliyor; araç çağrıları aşağıda görünür (1-3 dakika sürebilir).' : 'Claude çalışıyor…');
     ctl = new AbortController();
     try {
       const r = await runAgent(sample, {
         snapshot: agentApi.snapshot(), history: state.chat, message, tools, tier, signal: ctl.signal,
-        onText: ({ text }) => { out.textContent = text; log.scrollTop = log.scrollHeight; },
+        onText: ({ text }) => { out.classList.remove('thinking'); out.textContent = text; log.scrollTop = log.scrollHeight; },
       });
+      out.classList.remove('thinking');
       out.textContent = r.text;
       state.chat.push({ role: 'user', content: shown }, { role: 'assistant', content: r.text });
-      setStatus($('agentStatus'), r.truncated ? 'Cevap uzunluk sınırında kesildi.' : 'Tamam.', r.truncated ? 'err' : 'ok');
+      setStatus($('agentStatus'), r.truncated ? 'Cevap uzunluk sınırında kesildi.' : '', r.truncated ? 'err' : 'ok');
       return r;
     } catch (e) {
       out.textContent = e?.text || '';
@@ -1582,6 +1929,8 @@ $('rvtInput').onchange = () => { const f = $('rvtInput').files[0]; if (f) inspec
 
 // ------------------------------------------------------------ başlangıç
 plan.resize();
+// paylaşımlı kütüphane deposu (artifact db); yoksa yalnız localStorage
+if (window.claude?.use) window.claude.use('db').then((db) => db && state.lib.attach(db).then((n) => { if (n) console.info('kütüphane: paylaşımlı depodan ' + n + ' kayıt'); })).catch(() => {});
 // açılış: karşılama ekranı (demo düğmesi ile örnek bina)
 $('welcome').hidden = false;
 overlay(null);

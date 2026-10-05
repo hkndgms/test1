@@ -285,6 +285,22 @@ li.sev-medium i { color: var(--warn) !important; }
 .partsmenu .pop label:hover { background: var(--accent-soft); }
 .partsmenu .pop .hint { display: block; font-size: 11px; }
 .partsmenu .pop .foot { font-size: 11px; color: var(--muted); padding: 4px 8px 0; border-top: 1px solid var(--line); }
+
+.chat details.tools { font: 11px/1.4 var(--font-mono); color: var(--muted); padding: 0 10px; }
+.chat details.tools summary { cursor: pointer; list-style: none; opacity: .8; }
+.chat details.tools summary::before { content: '⚙ '; }
+.chat details.tools summary::-webkit-details-marker { display: none; }
+.chat details.tools div { padding: 2px 0 2px 14px; border-left: 2px solid var(--line); margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
+.chat details.tools div.err { color: var(--bad); }
+.chat .msg.ai { margin-right: 10px; }
+.chat .msg.user { margin-left: 28px; }
+.chat .msg.ai.thinking { color: var(--muted); font-style: italic; }
+.agent .status:empty { display: none; }
+
+.vtools .sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+.vtools .btn.on { outline: 2px solid var(--accent); outline-offset: -2px; }
+.markhint { font-size: 11px; color: var(--muted); padding: 0 2px 4px; }
+.markhint:empty { display: none; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -313,6 +329,7 @@ li.sev-medium i { color: var(--warn) !important; }
           <p class="hint" id="agentIntro" hidden></p>
           <p class="hint" id="agentUnavail">Claude sohbeti yalnız claude.ai içindeki sürümde çalışır (kendi aboneliğinizle, anahtarsız). Bu sürümde model otomatik algılamayla gösterilir; <a href="#" id="legacyLink">ayrıntılı ayarlar</a>.</p>
           <div class="chat" id="chatLog" aria-live="polite"></div>
+          <div class="markhint" id="markHint"></div>
           <div class="chatin">
             <textarea id="chatIn" rows="2" placeholder="Ne yapayım? Örn. giriş kapısını işaretle, tavan 320 cm olsun, WC'deki boşluğu kapı yap, 3B göster…" aria-label="Claude'a mesaj"></textarea>
             <button class="btn primary" id="chatSend" disabled>Gönder</button>
@@ -512,6 +529,10 @@ li.sev-medium i { color: var(--warn) !important; }
         <div class="vtools">
           <button class="btn small on" id="tglArch" title="Mimariyi göster/gizle">Mimari</button>
           <button class="btn small on" id="tglMep" title="Tesisatı göster/gizle">Tesisat</button>
+          <span class="sep"></span>
+          <button class="btn small" id="btnMarkPoint" title="Planda bir noktayı işaretle; sohbette M1, M2… diye anılır">📍 Nokta</button>
+          <button class="btn small" id="btnMarkRect" title="Planda bir alan seç; sohbette 'burada' deyince kullanılır">▭ Alan</button>
+          <button class="btn small" id="btnMarkClear" title="İşaretleri temizle" hidden>İşaretleri sil</button>
           <div class="partsmenu" id="partsMenu" hidden>
             <button class="btn small" id="partsBtn" aria-haspopup="true" aria-expanded="false" title="Paftadaki çizim bölümleri">Bölümler ▾</button>
             <div class="pop" id="partsPop" hidden></div>

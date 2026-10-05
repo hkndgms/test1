@@ -47,7 +47,12 @@ function roomAxis(room) {
 }
 
 // Bir öğe tanımı (tek tür ya da takım) için yer kaplama: [w, d] cm ve parçalar
-function spec(kind, sizeCm) {
+function spec(kind, sizeCm, lib = null) {
+  const li = lib?.get?.(kind);
+  if (li && li.kind !== 'ignore') {
+    const [w, d] = sizeCm && sizeCm.length === 2 ? sizeCm : li.sizeCm;
+    return { w, d, parts: [[li.kind, w, d, 0, 0, li.name]], label: li.label };
+  }
   const set = SETS[kind];
   if (set) {
     const [mk, mw, md] = set.main;
@@ -63,8 +68,8 @@ function spec(kind, sizeCm) {
 
 // Mahale yerleşim: layout grid (satır-sütun), row (tek sıra), perimeter (duvar dibi).
 // Döndürür: [{kind, poly, center, rot, wCm, hCm}] (çizim biriminde)
-export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'grid', spacingCm = 60, marginCm = 50, rotDeg = null, obstacles = [], k }) {
-  const sp = spec(kind, sizeCm);
+export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'grid', spacingCm = 60, marginCm = 50, rotDeg = null, obstacles = [], k, lib = null }) {
+  const sp = spec(kind, sizeCm, lib);
   if (!sp) throw new Error('bilinmeyen tür: ' + kind);
   const rot = rotDeg == null ? roomAxis(room.poly) : (rotDeg * Math.PI) / 180;
   const W = sp.w * k, D = sp.d * k, gap = spacingCm * k, margin = marginCm * k;
@@ -81,9 +86,9 @@ export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'g
     const [wx, wy] = toWorld(lx, ly);
     const poly = rectPoly(wx, wy, W, D, rot);
     if (!fits(poly, room.poly, obstacles.concat(out.map((o) => o.foot)))) return false;
-    const items = sp.parts.map(([pk, pw, pd, px, py]) => {
+    const items = sp.parts.map(([pk, pw, pd, px, py, ln]) => {
       const [ox, oy] = toWorld(lx + px * k, ly + py * k);
-      return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, rot), center: [ox, oy], rot, wCm: pw, hCm: pd };
+      return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, rot), center: [ox, oy], rot, wCm: pw, hCm: pd, lib: ln };
     });
     out.push({ foot: poly, items });
     return true;
@@ -104,9 +109,9 @@ export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'g
         const cx = a[0] + ux * t + inward[0] * (D / 2 + margin * 0.3), cy = a[1] + uy * t + inward[1] * (D / 2 + margin * 0.3);
         const poly = rectPoly(cx, cy, W, D, r);
         if (!fits(poly, room.poly, obstacles.concat(out.map((o) => o.foot)))) continue;
-        const items = sp.parts.map(([pk, pw, pd, px, py]) => {
+        const items = sp.parts.map(([pk, pw, pd, px, py, ln]) => {
           const ox = cx + Math.cos(r) * px * k - Math.sin(r) * py * k, oy = cy + Math.sin(r) * px * k + Math.cos(r) * py * k;
-          return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, r), center: [ox, oy], rot: r, wCm: pw, hCm: pd };
+          return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, r), center: [ox, oy], rot: r, wCm: pw, hCm: pd, lib: ln };
         });
         out.push({ foot: poly, items });
       }
@@ -130,13 +135,13 @@ export function layoutInRoom({ room, kind, count = 0, sizeCm = null, layout = 'g
 }
 
 // Tek öğe: belirli noktaya
-export function fixtureAt({ kind, x, y, sizeCm = null, rotDeg = 0, k }) {
-  const sp = spec(kind, sizeCm);
+export function fixtureAt({ kind, x, y, sizeCm = null, rotDeg = 0, k, lib = null }) {
+  const sp = spec(kind, sizeCm, lib);
   if (!sp) throw new Error('bilinmeyen tür: ' + kind);
   const rot = (rotDeg * Math.PI) / 180;
-  return { label: sp.label, groups: 1, items: sp.parts.map(([pk, pw, pd, px, py]) => {
+  return { label: sp.label, groups: 1, items: sp.parts.map(([pk, pw, pd, px, py, ln]) => {
     const ox = x + Math.cos(rot) * px * k - Math.sin(rot) * py * k, oy = y + Math.sin(rot) * px * k + Math.cos(rot) * py * k;
-    return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, rot), center: [ox, oy], rot, wCm: pw, hCm: pd };
+    return { kind: pk, poly: rectPoly(ox, oy, pw * k, pd * k, rot), center: [ox, oy], rot, wCm: pw, hCm: pd, lib: ln };
   }) };
 }
 
@@ -193,4 +198,14 @@ export function cutWall(poly, spans) {
 
 export function columnAt({ x, y, sizeCm = [40, 40], rotDeg = 0, k }) {
   return { poly: rectPoly(x, y, sizeCm[0] * k, (sizeCm[1] || sizeCm[0]) * k, (rotDeg * Math.PI) / 180), manual: true };
+}
+
+// Mevcut (algılanmış) boşluğu başka konuma taşımak: eski yer dolu sayılır, yeni yer duvara açılır.
+// Yeni merkez = eski merkez + along * shiftCm; duvar çerçevesine izdüşürülüp sınırlanır.
+export function shiftedOpening({ opening, wall, shiftCm, widthCm, k }) {
+  const f = wallFrame(wall.poly);
+  const w = (widthCm || opening.width / k) * k;
+  const cx = opening.center[0] + opening.along[0] * shiftCm * k, cy = opening.center[1] + opening.along[1] * shiftCm * k;
+  const a = (cx - f.c[0]) * f.u[0] + (cy - f.c[1]) * f.u[1];
+  return openingOnWall({ wall, kind: opening.kind, widthCm: w / k, atCm: (a - w / 2 - f.lo) / k, k });
 }

@@ -121,7 +121,8 @@ function clusterBoxes(items, gap) {
 
 // drawing, {region, units, rooms, unitScale, skipLayers}
 // -> { fixtures: [{id, kind, label, name, poly, center, rot, wCm, hCm, l, source}], ignored }
-export function extractFixtures(drawing, { region, units, rooms = [], unitScale, skipLayers = new Set() } = {}) {
+export function extractFixtures(drawing, { region, units, rooms = [], unitScale, skipLayers = new Set(), lib = null } = {}) {
+  const unknown = new Map(); // tanınmayan bloklar: ad -> {count, wCm, hCm}
   const k = 1 / (unitScale || UNIT_TO_CM[units] || 1); // çizim birimi / cm
   const toCm = 1 / k;
   const inR = (x, y) => !region || (x >= region[0] && x <= region[2] && y >= region[1] && y <= region[3]);
@@ -144,8 +145,17 @@ export function extractFixtures(drawing, { region, units, rooms = [], unitScale,
     const info = drawing.instances[inst];
     if (!info) continue;
     const short = info.name.replace(/^.*\$0\$/, ''); // dış referans öneki
-    let kind = classifyName(short);
+    // önce kalıcı kütüphane (kullanıcı / Claude tanımları), sonra yerleşik ad kuralları
+    const libItem = lib?.matchBlock(short);
+    let kind = libItem ? (libItem.kind === 'ignore' ? 'decor' : libItem.kind) : classifyName(short);
     if (!kind && decorLayer[info.layer]) kind = 'decor';
+    if (!kind) {
+      const bx = orientedBox(g.map((p) => p.pts), info.rot);
+      if (inR(bx.cx, bx.cy)) {
+        const w = bx.w * toCm, h = bx.h * toCm;
+        if (Math.max(w, h) >= 8 && Math.max(w, h) <= 600 && g.length >= 2) { const u = unknown.get(short) || { count: 0, wCm: w, hCm: h, layer: layerName(info.layer) }; u.count++; unknown.set(short, u); }
+      }
+    }
     if (!kind && furnLayer[info.layer]) kind = classifyName(layerName(info.layer));
     instKind.set(inst, kind);
     if (!kind) continue;
@@ -154,12 +164,12 @@ export function extractFixtures(drawing, { region, units, rooms = [], unitScale,
     const box = orientedBox(g.map((p) => p.pts), info.rot);
     if (!inR(box.cx, box.cy)) continue;
     const w = box.w * toCm, h = box.h * toCm;
-    if (!sizeOk(kind, w, h)) {
+    if (!libItem && !sizeOk(kind, w, h)) {
       // adı uyan ama ölçüsü uymayan blok: bütün bir yerleşim bloğu olabilir; parçalarını kümeye bırak
       if (Math.max(w, h) > 300) loose.push(...g.filter((p) => furnLayer[p.l] || furnLayer[info.layer]));
       continue;
     }
-    fixtures.push({ kind, name: short, poly: box.poly, center: [box.cx, box.cy], rot: info.rot, wCm: w, hCm: h, l: info.layer, source: 'block' });
+    fixtures.push({ kind, name: short, poly: box.poly, center: [box.cx, box.cy], rot: info.rot, wCm: w, hCm: h, l: info.layer, source: 'block', lib: libItem ? libItem.name : undefined });
   }
 
   // 2) patlatılmış tefriş: ıslak hacimlerdeki çizgi kümeleri, boyuta göre
@@ -198,5 +208,5 @@ export function extractFixtures(drawing, { region, units, rooms = [], unitScale,
     kept.push(f);
   }
   kept.forEach((f, i) => { f.id = 'F' + (i + 1); f.label = FIXTURE_KINDS[f.kind]?.label || f.kind; });
-  return { fixtures: kept, ignored };
+  return { fixtures: kept, ignored, unknown: [...unknown].map(([name, u]) => ({ name, ...u })).sort((a, b) => b.count - a.count).slice(0, 60) };
 }

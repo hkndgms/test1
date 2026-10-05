@@ -6,7 +6,11 @@ import { SYSTEMS } from './kb.js';
 const KIND_COLOR = { window: 'win', door: 'door', empty: 'empty', solid: 'wall' };
 
 export class Plan2D {
-  constructor(canvas, { onSelect, onRegion, onWall, colors }) {
+  constructor(canvas, { onSelect, onRegion, onWall, onMark, colors }) {
+    this.onMark = onMark; // (mark) => void ; mark: {type:'point', x, y} | {type:'rect', bbox}
+    this.markMode = null; // 'point' | 'rect' | null
+    this.marks = []; // [{id, type, x, y, bbox, label}]
+    this.sketches = []; // sohbetle çizilen 2B varlıklar
     this.cv = canvas;
     this.ctx = canvas.getContext('2d');
     this.onSelect = onSelect;
@@ -206,6 +210,8 @@ export class Plan2D {
     ctx.globalAlpha = 1;
     if (this.model && this.archVisible !== false) this._drawModel(ctx, C, scale, world);
     if (this.mep && this.mepVisible) this._drawMep(ctx, scale, world);
+    if (this.sketches.length) this._drawSketches(ctx, C, scale, world);
+    if (this.marks.length) this._drawMarks(ctx, C, scale, world);
     if (this.partRegions && this.partRegions.length) {
       world();
       ctx.setLineDash([14 / scale, 8 / scale]);
@@ -327,6 +333,47 @@ export class Plan2D {
     ctx.textAlign = 'start';
   }
 
+  // sohbetle çizilen varlıklar: katman rengi (sistem rengi varsa o), ince çizgi
+  _drawSketches(ctx, C, scale, world) {
+    world();
+    for (const e of this.sketches) {
+      if (e.hidden) continue;
+      ctx.strokeStyle = e.color || C.accent;
+      ctx.fillStyle = e.color || C.accent;
+      ctx.lineWidth = Math.max(1.2 / scale, (e.width || 0));
+      ctx.beginPath();
+      if (e.type === 'line') { ctx.moveTo(e.pts[0], e.pts[1]); ctx.lineTo(e.pts[2], e.pts[3]); ctx.stroke(); }
+      else if (e.type === 'polyline') { ctx.moveTo(e.pts[0][0], e.pts[0][1]); for (let i = 1; i < e.pts.length; i++) ctx.lineTo(e.pts[i][0], e.pts[i][1]); if (e.closed) ctx.closePath(); ctx.stroke(); }
+      else if (e.type === 'circle') { ctx.arc(e.center[0], e.center[1], e.r, 0, Math.PI * 2); ctx.stroke(); }
+      else if (e.type === 'arc') { ctx.arc(e.center[0], e.center[1], e.r, (e.a0 * Math.PI) / 180, (e.a1 * Math.PI) / 180); ctx.stroke(); }
+      else if (e.type === 'text') { ctx.save(); ctx.translate(e.at[0], e.at[1]); ctx.scale(1, -1); ctx.font = `${e.h || 10}px ${C.fontUi}`; ctx.fillText(e.text, 0, 0); ctx.restore(); }
+    }
+  }
+  // kullanıcı işaretleri: numaralı iğne / kesikli alan (ekran ölçeğinde boyut)
+  _drawMarks(ctx, C, scale, world) {
+    world();
+    for (const m of this.marks) {
+      ctx.strokeStyle = C.accent; ctx.fillStyle = C.accent;
+      if (m.type === 'rect') {
+        ctx.setLineDash([8 / scale, 5 / scale]); ctx.lineWidth = 2 / scale;
+        ctx.strokeRect(m.bbox[0], m.bbox[1], m.bbox[2] - m.bbox[0], m.bbox[3] - m.bbox[1]);
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.08; ctx.fillRect(m.bbox[0], m.bbox[1], m.bbox[2] - m.bbox[0], m.bbox[3] - m.bbox[1]); ctx.globalAlpha = 1;
+      } else { ctx.beginPath(); ctx.arc(m.x, m.y, 7 / scale, 0, Math.PI * 2); ctx.fill(); ctx.lineWidth = 2 / scale; ctx.strokeStyle = C.canvas; ctx.stroke(); }
+    }
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const r0 = this.cv.getBoundingClientRect();
+    ctx.font = `700 12px ${C.fontUi}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const m of this.marks) {
+      const x = m.type === 'rect' ? m.bbox[0] : m.x, y = m.type === 'rect' ? m.bbox[3] : m.y;
+      const sx = (x - this.view.cx) * scale + r0.width / 2, sy = r0.height / 2 - (y - this.view.cy) * scale;
+      ctx.fillStyle = C.accent; ctx.beginPath(); ctx.arc(sx + (m.type === 'rect' ? 10 : 0), sy - (m.type === 'rect' ? 10 : 18), 10, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = C.accentInk || '#fff'; ctx.fillText(m.id.replace('M', ''), sx + (m.type === 'rect' ? 10 : 0), sy - (m.type === 'rect' ? 10 : 18) + 0.5);
+    }
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
+
   hitTest(x, y) {
     const hm = this._hitMep(x, y);
     if (hm) return hm;
@@ -366,7 +413,7 @@ export class Plan2D {
       this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       const r = cv.getBoundingClientRect();
       const [wx, wy] = this.toWorld(e.clientX - r.left, e.clientY - r.top);
-      this._drag = { sx: e.clientX, sy: e.clientY, moved: false, region: this.regionMode, x0: wx, y0: wy, x1: wx, y1: wy };
+      this._drag = { sx: e.clientX, sy: e.clientY, moved: false, region: this.regionMode || this.markMode === 'rect', mark: this.markMode === 'rect', x0: wx, y0: wy, x1: wx, y1: wy };
       if (this._pointers.size === 2) this._pinch = this._pinchState();
     });
     cv.addEventListener('pointermove', (e) => {
@@ -417,7 +464,15 @@ export class Plan2D {
         this.draw();
         return;
       }
-      if (d.region && d.moved) {
+      if (d.mark && d.moved) {
+        this.markMode = null;
+        this.onMark?.({ type: 'rect', bbox: [Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.max(d.x0, d.x1), Math.max(d.y0, d.y1)] });
+      } else if (this.markMode === 'point' && !d.moved) {
+        const r = cv.getBoundingClientRect();
+        const [wx, wy] = this.toWorld(e.clientX - r.left, e.clientY - r.top);
+        this.markMode = null;
+        this.onMark?.({ type: 'point', x: wx, y: wy });
+      } else if (d.region && d.moved) {
         this.regionMode = false;
         this.region = [Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.max(d.x0, d.x1), Math.max(d.y0, d.y1)];
         this.onRegion?.(this.region);

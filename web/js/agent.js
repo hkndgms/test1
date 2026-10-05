@@ -7,7 +7,10 @@ export const AGENT_RULES = `Sen DWG2BIM uygulamasının içinde çalışan deney
 
 Sana verilen ARAÇLAR sayfanın gerçek fonksiyonlarıdır: liste araçları projenin güncel durumunu okur, "apply" aracı ayarları DOĞRUDAN uygular (katman rolleri, ölçüler, boşluk türleri, mahal adları, tesisat katman profilleri, bilgi bankası kuralları, asma tavan kotu, gezi rotası, rapor). Öneri yapma, uygula; sonra ne yaptığını 1-3 cümleyle söyle. Emin olamadığın, geri alınması zor bir şeyde (katman rolünü değiştirmek bütün algılamayı yeniler) önce kısa bir soru sorabilirsin.
 
-Çizimde olmayan şeyleri de ekleyebilirsin — bu uygulamanın yetki alanındadır: add_fixtures (mahale masa-sandalye, klima, klozet vb.; otomatik yerleşim), add_opening (duvara kapı/pencere), add_column, add_wall, delete_elements. "Yapılamaz / DWG'ye eklenmeli / Revit'te yapılmalı" deme; aracı çağır. Eklenenler 3B'ye ve IFC'ye girer.
+UZUN SÜRELİ BELLEK: library kalıcıdır (sayfa kapanınca silinmez; paylaşımlı depo varsa diğer kullanıcılar da yararlanır). Öğrendiğin standart değerleri, kullanıcı tercihlerini, çizim tariflerini ve tanıdığın blokları oraya kaydet (kind note/recipe/tefriş türü); bir işe başlamadan önce library list (filter) ile ilgili kayıt var mı bak.
+2B ÇİZİM: Kullanıcı "şu mahale yerden ısıtma çiz", "buraya ... çiz" derse draw aracıyla çizersin (pattern serpentine/grid ya da serbest entities); bilgi eksikse önce kütüphaneye bak, yoksa makul standartları kullan (yerden ısıtma: 16-17 mm PE-X, 15 cm aralık, kenar payı 20-30 cm, kolektörden başla) ve gerekiyorsa kullanıcıya 1-2 kısa soru sor; sonucu library add (recipe) ile kaydet. Kullanıcı planda işaret koyduysa (M1, M2… ya da "burada/şuraya") list_drawing marks ile oku ve o konumu/alanı kullan. export dxf ile indirtebilirsin.
+Yetkin tamdır: projeyi gerektiğinde baştan kurabilirsin (katman rollerini değiştir, yanlış duvar/mahal/boşlukları sil, kapıyı taşı, duvar/kolon ekle, tefriş yerleştir, sıfırla). Tanımadığın bloklar için library(add) ile kalıcı tanım yap (kind + aliases + gerekiyorsa parts); emin değilsen kullanıcıya sor.
+Çizimde olmayan şeyleri de ekleyebilirsin — bu uygulamanın yetki alanındadır: add_fixtures (mahale masa-sandalye, klima, klozet vb.; otomatik yerleşim), add_structure (duvara kapı/pencere, duvar, kolon), edit (kapı taşıma vb.), delete_elements. "Yapılamaz / DWG'ye eklenmeli / Revit'te yapılmalı" deme; aracı çağır. Eklenenler 3B'ye ve IFC'ye girer.
 
 Çalışma biçimi:
 - Önce ihtiyacın olan liste araçlarını çağır (gerekiyorsa birkaçını aynı turda), sonra tek bir "apply" çağrısında bütün değişiklikleri topla. Sonucu kontrol etmek için gerekirse tekrar listele.
@@ -20,7 +23,8 @@ Sana verilen ARAÇLAR sayfanın gerçek fonksiyonlarıdır: liste araçları pro
 
 export const REVIEW_TASK = `GÖREV: Bu projeyi uçtan uca incele ve programın normalde parametrelerle yaptığı bütün seçimleri sen yap.
 1) get_overview ve gerekli list_* araçlarıyla projeyi oku: katman rolleri doğru mu (duvar/kolon/kapı/pencere/yazı), birim ve bölge mantıklı mı, sorun listesindeki her madde.
-1b) set_parts (ids boş) ile paftadaki ayrık çizim bölümlerini listele: asıl kat planı hangisi, lejant/şema/detay/vaziyet planı hangisi karar ver. Birden çok gerçek plan parçası varsa (örn. büyük proje iki paftaya bölünmüş) hepsini ids ile seç; yanlış bölüm seçilmişse düzelt. Bölüm değişince algılama yenilenir; listeleri tekrar oku.
+1a) TEMİZLİK: review_notes ve list_walls/list_rooms ile çöp ve yanlış algıları bul: 1 m²'nin altındaki anlamsız mahaller, 10 cm'den kısa duvar kırıntıları, lejant/şema/detaydan gelen öğeler, süs blokları → delete_elements; çöp katmanlar → apply.ignore (genel kural) ve apply.mep ile ignore; tanınmayan ama gerçek tefriş/cihaz blokları → library add (kind + aliases). Modelin temiz ve okunur olmasını sağla.
+1b) parts list ile paftadaki ayrık çizim bölümlerini listele (tür tahmini ve benzer boyut bilgisiyle): asıl kat planı hangisi, lejant/şema/detay/vaziyet planı hangisi karar ver. Birden çok gerçek plan parçası varsa (büyük proje iki paftaya bölünmüş) hepsini parts select ile seç. AYNI ALANIN BAŞKA ÇİZİMLERİ (tavan/tefriş/tesisat planı: benzer boyutlu bölüm) varsa parts overlay ile asıl planın üstüne bindir — yan yana iki bina yapma. Kesit/görünüş bölümlerini parts read ile oku; kat yüksekliği, parapet, kapı/pencere yüksekliği gibi değerleri apply.params'a yansıt. Bölüm değişince algılama yenilenir; listeleri tekrar oku.
 2) Yanlış katman rolü varsa apply.layers ile düzelt (sonra listeleri yeniden oku).
 3) Boşlukları gözden geçir: giriş kapıları, cam izi olmayan "pencere"ler, geniş geçişler; mahal adlarını tamamla; ölçüleri (kat yüksekliği, kapı, parapet, pencere) projeye göre ayarla.
 4) Tesisat katmanlarını sınıflandır (özellikle BİLİNMİYOR olanlar), asma tavan kotunu çizimden çıkarabiliyorsan ver.
@@ -46,23 +50,23 @@ export function makeTools(api) {
     },
     {
       name: 'list_openings',
-      description: 'Boşlukları döndürür: id, tür, genişlik cm, dış/iç, programın gerekçesi, varsa kullanıcı/yapay zekâ değişikliği. kind ile süzülebilir (door, window, empty, solid).',
+      description: 'Boşlukları döndürür: id, tür, genişlik cm, dış/iç, programın gerekçesi, varsa değişiklik. kind ile süzülebilir (door, window, empty, solid).',
       inputSchema: { type: 'object', properties: { kind: { type: 'string' } } },
       execute: ({ kind }) => api.listOpenings(kind ? String(kind) : ''),
     },
     {
       name: 'list_rooms',
-      description: 'Mahalleri döndürür: id, ad (yoksa boş), alan m², içindeki tefriş türleri.',
+      description: 'Mahalleri döndürür: id, alan m², ad (yoksa boş), içindeki tefriş türleri.',
       execute: () => api.listRooms(),
     },
     {
       name: 'list_walls',
-      description: 'Duvar, kolon ve cam cephe şeritlerini döndürür: id, kalınlık cm, uzunluk m, dış/iç, çizim koordinatlarında sınır kutusu (add_wall için).',
+      description: 'Duvar, kolon ve cam cephe şeritlerini döndürür: id, kalınlık cm, uzunluk m, dış/iç, çizim koordinatlarında sınır kutusu (add_structure / tefriş koordinatı için).',
       execute: () => api.listWalls(),
     },
     {
       name: 'list_fixtures',
-      description: 'Tanınan tefrişi döndürür: id, tür, ölçü, kaynak (blok adı / küme), hangi mahalde.',
+      description: 'Tanınan tefrişi döndürür: id, tür, ölçü, kaynak (blok adı / küme / sohbetle eklendi), hangi mahalde.',
       execute: () => api.listFixtures(),
     },
     {
@@ -71,21 +75,15 @@ export function makeTools(api) {
       execute: () => api.listMep(),
     },
     {
-      name: 'list_texts',
-      description: 'Çizimdeki yazıları arar (mahal adları, kot yazıları, başlıklar, çap/ölçü yazıları). filter: içinde geçen metin (isteğe bağlı); layer: katman adı süzgeci (isteğe bağlı). En çok 200 satır: yazı, katman, konum.',
-      inputSchema: { type: 'object', properties: { filter: { type: 'string' }, layer: { type: 'string' } } },
-      execute: ({ filter, layer }) => api.listTexts(filter ? String(filter) : '', layer ? String(layer) : ''),
+      name: 'list_drawing',
+      description: 'Çizimin ham içeriğini ve kullanıcı işaretlerini okur. what "texts": yazılar (mahal adları, kot, başlık, çap/ölçü) — filter metin, layer katman süzgeci; "blocks": blok adları ve adetleri — filter; "marks": kullanıcının planda koyduğu işaretler (M1 nokta / alan, hangi mahalde) — kullanıcı "burada/şuraya" derse önce bunu oku; clear true işaretleri temizler; "sketches": sohbetle çizilmiş 2B varlıklar.',
+      inputSchema: { type: 'object', properties: { what: { type: 'string' }, filter: { type: 'string' }, layer: { type: 'string' }, clear: { type: 'boolean' } }, required: ['what'] },
+      execute: ({ what, filter, layer, clear }) => (what === 'blocks' ? api.listBlocks(filter ? String(filter) : '') : what === 'marks' ? api.marks(!!clear) : what === 'sketches' ? api.listSketches() : api.listTexts(filter ? String(filter) : '', layer ? String(layer) : '')),
     },
     {
-      name: 'list_blocks',
-      description: 'Çizimdeki blok (sembol) adlarını ve sayılarını döndürür: tefriş, cihaz, kapı/pencere blokları. filter ile süzülebilir.',
-      inputSchema: { type: 'object', properties: { filter: { type: 'string' } } },
-      execute: ({ filter }) => api.listBlocks(filter ? String(filter) : ''),
-    },
-    {
-      name: 'get_diagnostics',
-      description: 'Programın emin olamadığı noktaların güncel listesi (önem, açıklama, ilgili kimlikler).',
-      execute: () => api.diagnostics(),
+      name: 'review_notes',
+      description: 'Programın emin olamadığı noktalar (önem, açıklama, kimlikler) + tanınmayan bloklar (ad, adet, ölçü, katman) + profili bilinmeyen tesisat katmanları + kütüphanedeki tanımlar. Temizlik ve kütüphane kararları için.',
+      execute: () => api.diagnostics() + '\n\n' + api.listUnknown(),
     },
     {
       name: 'apply',
@@ -94,46 +92,39 @@ export function makeTools(api) {
       execute: ({ changes }) => api.apply(changes && typeof changes === 'object' ? changes : {}),
     },
     {
-      name: 'delete_elements',
-      description: 'Verilen kimlikleri modelden kaldırır (W duvar, C kolon, O boşluk, R mahal, G cam cephe, F tefriş). Yanlış algılanmış öğeler için.',
-      inputSchema: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } } }, required: ['ids'] },
-      execute: ({ ids }) => api.deleteElements(Array.isArray(ids) ? ids.map(String) : []),
-    },
-    {
-      name: 'set_fixture',
-      description: 'Bir tefriş öğesinin türünü değiştirir. kind: wc, squat, urinal, sink, ksink, faucet, shower, bathtub, ac, radiator, drain, table, desk, chair, sofa, bed, cabinet, counter.',
-      inputSchema: { type: 'object', properties: { id: { type: 'string' }, kind: { type: 'string' } }, required: ['id', 'kind'] },
-      execute: ({ id, kind }) => api.setFixture(String(id), String(kind)),
+      name: 'edit',
+      description: 'Öğe düzenler / siler. id ön ekine göre: O boşluk (kind door|window|empty|solid, widthCm, heightCm, sillCm, shiftCm = duvar boyunca taşı [eski yer duvarla dolar], toWall + atCm = başka duvara al), W/C/G duvar-kolon-cam cephe (heightCm, exterior), F tefriş (kind: tür ya da kütüphane adı), S eskiz. delete true: kaldırır; ids ile birden çok kimlik birden silinir (çöp temizliği). Kapı yeri yanlışsa shiftCm/toWall ile düzelt.',
+      inputSchema: { type: 'object', properties: { id: { type: 'string' }, ids: { type: 'array', items: { type: 'string' } }, kind: { type: 'string' }, widthCm: { type: 'number' }, heightCm: { type: 'number' }, sillCm: { type: 'number' }, shiftCm: { type: 'number' }, toWall: { type: 'string' }, atCm: { type: 'number' }, exterior: { type: 'boolean' }, delete: { type: 'boolean' } } },
+      execute: (inp) => (Array.isArray(inp.ids) && inp.ids.length ? api.deleteElements(inp.ids.map(String)) : api.edit(inp)),
     },
     {
       name: 'add_fixtures',
-      description: 'Çizimde OLMAYAN tefrişi ekler ve mahale otomatik yerleştirir: kind tek tür (table, chair, desk, sofa, bed, cabinet, counter, wc, sink, urinal, shower, bathtub, ac, radiator…) ya da takım (table_set = masa + 4 sandalye, meeting_set, desk_set, sofa_set, bed_set, wc_set). room: mahal kimliği (R..). count: kaç takım/öğe (0 = sığdığı kadar). layout: grid | row | perimeter (duvar dibi). sizeCm [en, derinlik], spacingCm, rotDeg isteğe bağlı. room yerine at [x,y] (çizim koordinatı) verilirse tek öğe o noktaya konur. Kullanıcı "masa sandalye koy", "klima ekle" dediğinde kullan.',
+      description: 'Çizimde OLMAYAN tefrişi ekler ve mahale otomatik yerleştirir: kind tek tür (table, chair, desk, sofa, bed, cabinet, counter, wc, sink, urinal, shower, bathtub, ac, radiator…), takım (table_set = masa + 4 sandalye, meeting_set, desk_set, sofa_set, bed_set, wc_set) ya da kütüphane öğesi adı. room: mahal kimliği (R..). count: kaç adet (0 = sığdığı kadar). layout: grid | row | perimeter (duvar dibi). sizeCm [en, derinlik], spacingCm, rotDeg isteğe bağlı. room yerine at [x,y] (çizim koordinatı) verilirse tek öğe o noktaya konur.',
       inputSchema: { type: 'object', properties: { kind: { type: 'string' }, room: { type: 'string' }, count: { type: 'number' }, layout: { type: 'string' }, sizeCm: { type: 'array', items: { type: 'number' } }, spacingCm: { type: 'number' }, rotDeg: { type: 'number' }, at: { type: 'array', items: { type: 'number' } } }, required: ['kind'] },
       execute: (inp) => api.addFixtures(inp),
     },
     {
-      name: 'add_opening',
-      description: 'Çizimde olmayan bir kapı ya da pencereyi mevcut bir duvara açar (duvar 3B\'de kesilir). wall: duvar kimliği (W..), kind door|window, widthCm, atCm: duvarın başından mesafe (boşsa ortaya), heightCm / sillCm isteğe bağlı.',
-      inputSchema: { type: 'object', properties: { wall: { type: 'string' }, kind: { type: 'string' }, widthCm: { type: 'number' }, atCm: { type: 'number' }, heightCm: { type: 'number' }, sillCm: { type: 'number' } }, required: ['wall'] },
-      execute: (inp) => api.addOpening(inp),
+      name: 'add_structure',
+      description: 'Çizimde olmayan yapı öğesi ekler. type "door"|"window": mevcut duvara açar (wall W.., widthCm, atCm duvar başından [boşsa orta], heightCm, sillCm; duvar 3B\'de kesilir). type "wall": iki nokta arası duvar (x1,y1,x2,y2 çizim koordinatı, thicknessCm; mahaller yeniden hesaplanır). type "column": at [x,y], sizeCm [en, boy], rotDeg.',
+      inputSchema: { type: 'object', properties: { type: { type: 'string' }, wall: { type: 'string' }, widthCm: { type: 'number' }, atCm: { type: 'number' }, heightCm: { type: 'number' }, sillCm: { type: 'number' }, x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' }, thicknessCm: { type: 'number' }, at: { type: 'array', items: { type: 'number' } }, sizeCm: { type: 'array', items: { type: 'number' } }, rotDeg: { type: 'number' } }, required: ['type'] },
+      execute: (inp) => api.addStructure(inp),
     },
     {
-      name: 'add_column',
-      description: 'Çizimde olmayan bir kolon ekler: at [x,y] çizim koordinatı, sizeCm [en, boy] (varsayılan 40x40), rotDeg.',
-      inputSchema: { type: 'object', properties: { at: { type: 'array', items: { type: 'number' } }, sizeCm: { type: 'array', items: { type: 'number' } }, rotDeg: { type: 'number' } }, required: ['at'] },
-      execute: ({ at, sizeCm, rotDeg }) => api.addColumn(at, sizeCm, rotDeg),
+      name: 'parts',
+      description: 'Paftadaki ayrık çizim bölümleri. action "list": bölümler (tür tahmini: kat planı / kesit-görünüş / şema / lejant / detay / vaziyet / tavan-tefriş planı; boyut; içerik; benzer boyutlu bölümler). "select" ids: işlenecek bölümleri seç (algılama yenilenir). "read" id: bölümün içeriğini oku (kot yazıları ve farkları → kat yüksekliği, parapet; ölçü sayıları; yazılar; katmanlar). "overlay" base + others: aynı alanın başka çizimlerini (tavan/tefriş/tesisat planı) asıl planın üstüne bindirir — yan yana iki bina yapma.',
+      inputSchema: { type: 'object', properties: { action: { type: 'string' }, ids: { type: 'array', items: { type: 'string' } }, id: { type: 'string' }, base: { type: 'string' }, others: { type: 'array', items: { type: 'string' } } }, required: ['action'] },
+      execute: ({ action, ids, id, base, others }) => {
+        if (action === 'select') return api.setParts(Array.isArray(ids) ? ids.map(String) : []);
+        if (action === 'read') return api.readPart(String(id));
+        if (action === 'overlay') return api.overlayParts(String(base), Array.isArray(others) ? others.map(String) : []);
+        return api.setParts(null);
+      },
     },
     {
-      name: 'add_wall',
-      description: 'Çizimde eksik bir duvarı iki nokta arasına ekler (çizim koordinatları, list_walls ile aynı birim) ve mahalleri yeniden hesaplar. thicknessCm isteğe bağlı (varsayılan 10).',
-      inputSchema: { type: 'object', properties: { x1: { type: 'number' }, y1: { type: 'number' }, x2: { type: 'number' }, y2: { type: 'number' }, thicknessCm: { type: 'number' } }, required: ['x1', 'y1', 'x2', 'y2'] },
-      execute: ({ x1, y1, x2, y2, thicknessCm }) => api.addWall(+x1, +y1, +x2, +y2, thicknessCm ? +thicknessCm : 10),
-    },
-    {
-      name: 'set_parts',
-      description: 'Paftadaki ayrık çizim gruplarını (bölümleri) listeler ve/veya işlenecek bölümleri seçer. ids boşsa yalnız listeler; ids verilirse o bölümler birlikte işlenir (algılama yenilenir).',
-      inputSchema: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' } } } },
-      execute: ({ ids }) => api.setParts(Array.isArray(ids) ? ids.map(String) : null),
+      name: 'library',
+      description: 'Kalıcı öğe kütüphanesi (tarayıcıda saklanır; sonraki oturum ve projelerde geçerli). action "list"; "add": name, label, kind (temel tür: table, chair, desk, sofa, bed, cabinet, counter, wc, sink, urinal, shower, bathtub, ac, radiator, drain, faucet, ksink, squat ya da "ignore" = süs/çöp; "note" = uzun süreli bilgi notu [text, tags]: standart değerler, kullanıcı tercihleri, öğrenilen kurallar; "recipe" = çizim tarifi [text, params]), sizeCm [en, derinlik], aliases (bu bloğu tanıyacak düzenli ifadeler; katlanmış BÜYÜK harf blok adı; projeye özgü ön ek koyma), parts (isteğe bağlı 3B: [{x, y, w, d, z0, z1, mat, shape}] cm, x merkezden sağa, y arkadan öne; mat wood|fabric|metal|chrome|ceramic|glass|seat; shape box|oval), note; "remove": name. Tanımlanan öğe add_fixtures kind olarak kullanılır ve blokları otomatik tanır.',
+      inputSchema: { type: 'object', properties: { action: { type: 'string' }, name: { type: 'string' }, label: { type: 'string' }, kind: { type: 'string' }, sizeCm: { type: 'array', items: { type: 'number' } }, aliases: { type: 'array', items: { type: 'string' } }, parts: { type: 'array', items: { type: 'object' } }, note: { type: 'string' }, text: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, params: { type: 'object' }, filter: { type: 'string' } }, required: ['action'] },
+      execute: ({ action, ...def }) => (action === 'add' ? api.libraryAdd(def) : action === 'remove' ? api.library(String(def.name || '')) : api.library('', def.filter ? String(def.filter) : '')),
     },
     {
       name: 'show',
@@ -142,9 +133,21 @@ export function makeTools(api) {
       execute: ({ view, select, tour, panel }) => api.show({ view: view ? String(view) : '', select: select ? String(select) : '', tour: !!tour, panel: panel ? String(panel) : '' }),
     },
     {
-      name: 'export_ifc',
-      description: 'Modeli IFC dosyası olarak indirir (kullanıcıya kaydetme onayı çıkar). Kullanıcı "IFC indir / dışa aktar" dediğinde kullan.',
-      execute: () => api.exportIfc(),
+      name: 'draw',
+      description: '2B çizim yapar (plana işlenir, DXF olarak indirilebilir, system verilirse 3B\'de boru olarak da görünür). İki biçim: (a) entities: serbest varlıklar [{type line pts[x1,y1,x2,y2]} | {type polyline pts[[x,y],...] closed} | {type circle center r} | {type arc center r a0 a1} | {type text at text h}] çizim koordinatında (list_walls / marks ile al); (b) pattern: "serpentine" (yerden ısıtma / kılcal boru: pitchCm aralık, marginCm kenar payı, startAt M.. işareti ya da [x,y] kolektör tarafı) veya "grid" (spacingCm). Alan: room R.. ya da mark M.. (alan işareti). layer: katman adı (ör. M-YERDEN ISITMA); system: coldwater|hotwater|heating|... (3B boru rengi/kotu); widthCm çizgi kalınlığı. Kullanıcı bir çizim isteyince önce library list ile ilgili not/tarif var mı bak; yoksa standart değerleri kullan ve library add (kind note/recipe) ile kaydet.',
+      inputSchema: { type: 'object', properties: { entities: { type: 'array', items: { type: 'object' } }, pattern: { type: 'string' }, room: { type: 'string' }, mark: { type: 'string' }, pitchCm: { type: 'number' }, spacingCm: { type: 'number' }, marginCm: { type: 'number' }, startAt: {}, layer: { type: 'string' }, system: { type: 'string' }, widthCm: { type: 'number' }, label: { type: 'string' } } },
+      execute: (inp) => api.draw(inp),
+    },
+    {
+      name: 'export',
+      description: 'Dosya indirir (kullanıcıya kaydetme onayı çıkar). format "ifc": 3B BIM modeli. format "dxf": 2B çizim — sohbetle çizilenler + (include "model" ise) algılanan duvar/kapı/pencere/mahal/tefriş çizgileri, orijinal plan koordinatlarında; AutoCAD açar, "Farklı kaydet → DWG" yapılır (tarayıcıda doğrudan DWG yazılamıyor).',
+      inputSchema: { type: 'object', properties: { format: { type: 'string' }, include: { type: 'string' } }, required: ['format'] },
+      execute: ({ format, include }) => (format === 'dxf' ? api.exportDxf(String(include || 'sketches')) : api.exportIfc()),
+    },
+    {
+      name: 'reset_project',
+      description: 'Bütün düzenlemeleri (silinenler, tür değişiklikleri, eklenen tefriş/kapı/kolon/duvar, bindirilen bölümler) geri alır ve çizimi baştan algılar.',
+      execute: () => api.resetProject(),
     },
   ];
   return tools;

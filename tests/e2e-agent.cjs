@@ -44,9 +44,33 @@ const { chromium } = require(process.env.PW || 'playwright');
         text = `${r} / ${r2} [${log.join(', ')}]`;
       } else if (/kapı aç|kapı ekle/i.test(last)) {
         const walls = String(await call('list_walls')).split('\n').slice(2).map((r) => r.split('\t')).filter((r) => r[1] === 'duvar' && r[4] === 'iç' && parseFloat(r[3]) > 3);
-        const r = await call('add_opening', { wall: walls[0][0], kind: 'door', widthCm: 100 });
-        const c = await call('add_column', { at: [300, 300], sizeCm: [40, 40] });
+        const r = await call('add_structure', { type: 'door', wall: walls[0][0], widthCm: 100 });
+        const c = await call('add_structure', { type: 'column', at: [300, 300], sizeCm: [40, 40] });
         text = `${r} / ${c} [${log.join(', ')}]`;
+      } else if (/kütüphane|tabure/i.test(last)) {
+        const u = await call('review_notes');
+        const a = await call('library', { action: 'add', name: 'bar_tabure', label: 'Bar taburesi', kind: 'chair', sizeCm: [38, 38], aliases: ['TABURE|STOOL'], parts: [{ x: 0, y: 0, w: 36, d: 36, z0: 70, z1: 76, mat: 'fabric', shape: 'oval' }, { x: 0, y: 14, w: 4, d: 4, z0: 0, z1: 70, mat: 'chrome' }, { x: 0, y: 0, w: 36, d: 36, z0: 0, z1: 2, mat: 'chrome', shape: 'oval' }] });
+        const rooms = String(await call('list_rooms')).split('\n').slice(1).map((r) => r.split('\t'));
+        const mut = rooms.find((r) => /MUTFAK/.test(r[2])) || rooms[0];
+        const r = await call('add_fixtures', { kind: 'bar_tabure', room: mut[0], count: 3, layout: 'row' });
+        const l = await call('library', { action: 'list' });
+        text = `${String(u).split('\n')[0]} / ${a} / ${r} / kütüphane ${String(l).split('\n').length - 1} satır [${log.join(', ')}]`;
+      } else if (/kapıyı taşı|duvarı sil/i.test(last)) {
+        const ops = String(await call('list_openings', { kind: 'door' })).split('\n').slice(1).map((r) => r.split('\t')).filter((r) => r[3] === 'iç');
+        const e = await call('edit', { id: ops[0][0], shiftCm: 60 });
+        const walls = String(await call('list_walls')).split('\n').slice(2).map((r) => r.split('\t')).filter((r) => r[1] === 'duvar' && r[4] === 'iç');
+        const w = await call('edit', { id: walls[walls.length - 1][0], delete: true });
+        text = `${e} / ${w} [${log.join(', ')}]`;
+      } else if (/yerden ısıtma|çiz/i.test(last)) {
+        const mk = await call('list_drawing', { what: 'marks' });
+        const rooms = String(await call('list_rooms')).split('\n').slice(1).map((r) => r.split('\t'));
+        const of = rooms.find((r) => /OFİS 1/.test(r[2])) || rooms[0];
+        const lib = await call('library', { action: 'list', filter: 'ısıtma' });
+        const n = await call('library', { action: 'add', name: 'yerden_isitma_std', kind: 'recipe', label: 'Yerden ısıtma standardı', text: 'PE-X 16 mm, aralık 15 cm, kenar payı 25 cm, kolektörden başla', tags: ['ısıtma', 'serpantin'], params: { pitchCm: 15, marginCm: 25 } });
+        const d = await call('draw', { pattern: 'serpentine', room: of[0], pitchCm: 15, marginCm: 25, layer: 'M-YERDEN ISITMA', system: 'heating' });
+        const e = await call('draw', { entities: [{ type: 'circle', center: [100, 100], r: 20 }, { type: 'text', at: [120, 100], text: 'KOLEKTÖR', h: 12 }], layer: 'M-YERDEN ISITMA' });
+        const x = await call('export', { format: 'dxf', include: 'model' });
+        text = `${String(mk).split('\n')[0]} / ${n} / ${d} / ${e} / ${x} [${log.join(', ')}]`;
       } else if (/3b|3d/i.test(last)) {
         const r = await call('show', { view: '3d' });
         text = `3B görünüme geçtim (${r}). [${log.join(', ')}]`;
@@ -59,6 +83,7 @@ const { chromium } = require(process.env.PW || 'playwright');
     };
     sample.json = async () => ({});
     sample.limits = async () => ({ maxPromptBytes: 262144, tools: { maxCount: 20 } });
+    // 19 araç 20 sınırının altında kalmalı
     window.claude = { use: async (name) => (name === 'sample' ? sample : null) };
   });
   await page.goto(url, { waitUntil: 'domcontentloaded' });
@@ -71,8 +96,9 @@ const { chromium } = require(process.env.PW || 'playwright');
   console.log('parts menu hidden (demo tek bölüm):', await page.$eval('#partsMenu', (e) => e.hidden), '| legacy hidden:', await page.$eval('#legacy', (e) => e.hidden));
   console.log('agent tier:', await page.textContent('#agentTier'));
   // uçtan uca inceleme
+  const idle = (n) => page.waitForFunction((n) => document.querySelectorAll('#chatLog .msg.user').length > n && !document.getElementById('chatSend').disabled && !document.querySelector('#chatLog .msg.ai.thinking'), n, { timeout: 120000 });
   await page.click('#agentReview');
-  await page.waitForFunction(() => /Tamam|kesildi|veremedi|izin/.test(document.getElementById('agentStatus').textContent), null, { timeout: 120000 });
+  await idle(0);
   console.log('status:', await page.textContent('#agentStatus'));
   console.log('chat:', (await page.textContent('#chatLog')).replace(/\s+/g, ' ').slice(0, 500));
   console.log('ai status:', await page.textContent('#aiStatus'));
@@ -80,19 +106,27 @@ const { chromium } = require(process.env.PW || 'playwright');
   // sohbet
   await page.fill('#chatIn', 'Tesisat katmanlarını özetle');
   await page.press('#chatIn', 'Enter');
-  await page.waitForFunction(() => document.querySelectorAll('#chatLog .msg.user').length >= 2 && /Tamam/.test(document.getElementById('agentStatus').textContent), null, { timeout: 60000 });
+  await idle(1);
   await page.fill('#chatIn', '3B göster');
   await page.press('#chatIn', 'Enter');
-  await page.waitForFunction(() => document.querySelectorAll('#chatLog .msg.user').length >= 3 && /Tamam/.test(document.getElementById('agentStatus').textContent), null, { timeout: 60000 });
+  await idle(2);
   console.log('tab 3d after chat:', await page.$eval('#tab3d', (b) => b.classList.contains('on')));
   // çizimde olmayan öğeler: masa-sandalye, klima, kapı, kolon
-  for (const msg of ['Giriş holüne masa sandalye koy', 'Koridora bir kapı aç']) {
+  // kullanıcı işareti: plan üstüne nokta koy (API ile)
+  await page.evaluate(() => window.dwg2bim.api && window.dwg2bim.state.marks.length === 0 && (window.__mark = true));
+  const dlAll = [];
+  page.on('download', (d) => dlAll.push(d));
+  for (const msg of ['Giriş holüne masa sandalye koy', 'Koridora bir kapı aç', 'Kütüphaneye bar taburesi ekle ve mutfağa koy', 'İlk iç kapıyı taşı ve son iç duvarı sil', 'Ofis 1 e yerden ısıtma çiz ve dxf indir']) {
     const n = await page.$$eval('#chatLog .msg.user', (l) => l.length);
     await page.fill('#chatIn', msg); await page.press('#chatIn', 'Enter');
-    await page.waitForFunction((n) => document.querySelectorAll('#chatLog .msg.user').length > n && /Tamam|veremedi/.test(document.getElementById('agentStatus').textContent), n, { timeout: 60000 });
+    await idle(n);
     console.log('>', msg, '→', (await page.$$eval('#chatLog .msg.ai', (l) => l[l.length - 1].textContent)).slice(0, 200));
   }
   console.log('side after adds:', await page.textContent('#sideSum'));
+  console.log('sketches:', await page.evaluate(() => window.dwg2bim.state.sketches.length), '| dxf downloads:', dlAll.map((d) => d.suggestedFilename()).join(','));
+  if (dlAll.length) { const pth = path.join(out, 'agent-' + dlAll[0].suggestedFilename()); await dlAll[0].saveAs(pth); console.log('dxf saved:', pth); }
+  await page.click('#tabPlan'); await page.waitForTimeout(800); await page.screenshot({ path: path.join(out, 'e2e-agent-plan.png') });
+  await page.click('#tab3d'); await page.waitForTimeout(1500);
   await page.waitForTimeout(2500);
   await page.screenshot({ path: path.join(out, 'e2e-agent-adds.png') });
   const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 20000 }), page.click('#btnExportTop')]);

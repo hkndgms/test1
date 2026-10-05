@@ -161,7 +161,7 @@ export function buildSolids(model, params, overrides = {}) {
     if (o.deleted) continue;
     const poly = ccw(f.poly.map(tr));
     const fr = fixtureFrame(poly, wallPolysM);
-    const parts = fixtureParts(f.kind, fr, { H, ceilM });
+    const parts = f.libParts ? libraryParts(f.libParts, fr) : fixtureParts(f.kind, fr, { H, ceilM });
     if (!parts) continue;
     const z1 = Math.max(...parts.map((p) => p.z1)), z0 = Math.min(...parts.map((p) => p.z0));
     out.push({ type: 'fixture', id: f.id, src: f.id, name: f.label + (f.name && f.source === 'block' ? ` (${f.name})` : ''), fx: f.kind, profile: poly, z0, z1, parts, props: { kind: f.kind, block: f.source === 'block' ? f.name : '', widthCm: Math.round(fr.W * 100), depthCm: Math.round(fr.D * 100) } });
@@ -244,6 +244,19 @@ function fixtureFrame(poly, walls) {
   if ((cx - mx) * v[0] + (cy - my) * v[1] < 0) v = [-v[0], -v[1]];
   const D = Math.abs((cx - mx) * v[0] + (cy - my) * v[1]) * 2 || 0.01;
   return { back: [mx, my], u, v, W, D, nearWall: bestD < 0.25 };
+}
+
+// Kütüphane öğesi: kullanıcı/Claude tanımlı kutular (cm, yerel: x merkezden sağa, y arkadan öne)
+function libraryParts(defs, fr) {
+  const { back, u, v } = fr;
+  const world = (x, y) => [back[0] + u[0] * x + v[0] * y, back[1] + u[1] * x + v[1] * y];
+  const P = [];
+  for (const p of defs) {
+    const x = p.x / 100, y = p.y / 100, w = p.w / 100, d = p.d / 100;
+    if (p.shape === 'oval') { const pr = []; for (let i = 0; i < 16; i++) { const t = (i / 16) * Math.PI * 2; pr.push(world(x + Math.cos(t) * w / 2, y + d / 2 + Math.sin(t) * d / 2)); } P.push({ profile: pr, z0: p.z0 / 100, z1: p.z1 / 100, mat: p.mat }); }
+    else P.push({ profile: [world(x - w / 2, y), world(x + w / 2, y), world(x + w / 2, y + d), world(x - w / 2, y + d)], z0: p.z0 / 100, z1: p.z1 / 100, mat: p.mat });
+  }
+  return P.length ? P : null;
 }
 
 // Parça üreticileri: yerel koordinat (x: arka kenar boyunca, merkez 0; y: arkadan öne 0..D)
