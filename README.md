@@ -6,8 +6,8 @@ Sunucu veya bulut gerekmez; dosyalar kullanıcının bilgisayarından çıkmaz.
 ## Ne yapar
 
 **Akış:**
-- **İlk açılış:** Kısa bir **karşılama ekranı** ne olduğunu ve üç adımda nasıl kullanıldığını anlatır. "Demo binayı gör" ile program tarafından üretilen örnek bir ofis binası (`web/js/demo.js`: cam giydirme cepheli giriş holü, toplantı, mutfak, ofisler, WC grubu, teknik hacim; tefriş, klima ve borular) normal algılama hattından geçirilip 3B gösterilir. Dışarıdan hiçbir dosya indirilmez.
-- **Kendi dosyanız:** Bir DWG yüklenince model hemen gösterilmez. Önce **analiz ekranı** açılır: program tespitlerini özetler, yapay zekâ komutunu verir; cevap yapıştırılınca düzeltmeler uygulanır, sonra 2B veya 3B gösterilir. claude.ai'de "Claude ile otomatik yap" ile bu adım tek tıktır.
+- **Arayüz:** Sol tarafta yalnız **Claude sohbeti** vardır (dosya adı + tek satır özet, sohbet, "Projeyi yeniden incele"). Ayar panelleri yoktur: her ayar sohbetle istenir ve Claude araçlarla uygular. Eski ayrıntılı paneller gizli bir çekmecede durur (sohbete "ayrıntılı ayarları aç" denince ya da claude.ai dışındaki sürümde "ayrıntılı ayarlar" bağlantısıyla açılır; Esc kapatır). Plan/3B sekmelerinin yanındaki **Bölümler** menüsü paftadaki ayrık çizim gruplarını listeler; Claude açılışta asıl planı seçer, kullanıcı tik atarak elle değiştirebilir.
+- **İlk açılış:** İki düğme: "Demoyu gör" ve "Projeni aç". Dosya açılınca Claude (claude.ai sürümünde) projeyi kendisi uçtan uca inceler, ayarları uygular ve 3B'yi gösterir; ilk çağrıda claude.ai onay sorar. "Demoyu gör" ile program tarafından üretilen örnek bir ofis binası (`web/js/demo.js`: cam giydirme cepheli giriş holü, toplantı, mutfak, ofisler, WC grubu, teknik hacim; tefriş, klima ve borular) normal algılama hattından geçirilip 3B gösterilir. Dışarıdan hiçbir dosya indirilmez.
 - **Otomatik gezi:** 3B görünümdeki **Otomatik gezi** düğmesiyle başlar (kendiliğinden açılmaz). Göz hizasında (1,6 m) binanın içinde dolaşılır.
   - Rota mahalleri kapı ve geçişlerden bağlar; girişten başlar, her mahalde çevresine bakar.
   - Yapay zekâ cevabındaki `tour.order` / `tour.notes` varsa o sıra ve açıklamalar kullanılır.

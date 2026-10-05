@@ -277,6 +277,23 @@ li.sev-medium i { color: var(--warn) !important; }
 .chat .msg.err { color: var(--bad); }
 .chatin { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; }
 .chatin textarea { min-height: 44px; }
+
+.side { display: grid; grid-template-rows: auto 1fr; padding: 0; }
+.sidehead { padding: 12px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 2px; }
+.sidehead b { font: 600 14px/1.3 var(--font-ui); word-break: break-word; }
+.agent { display: grid; grid-template-rows: auto 1fr auto auto auto; gap: 8px; padding: 10px 16px 14px; min-height: 0; }
+.agent .chat { max-height: none; min-height: 120px; overflow: auto; }
+.agent .chat:empty { display: block; }
+.work { position: relative; }
+.legacy { position: absolute; right: 0; top: 0; bottom: 0; width: min(420px, 100vw); overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); padding: 0 16px 24px; z-index: 8; box-shadow: -8px 0 30px rgba(0,0,0,.15); }
+.btn.big { padding: 12px 20px; font-size: 15px; }
+
+.partsmenu { position: relative; }
+.partsmenu .pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 7; min-width: 300px; max-width: 420px; max-height: 60vh; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 8px; display: grid; gap: 4px; }
+.partsmenu .pop label { display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start; padding: 6px 8px; border-radius: var(--r); font-size: 13px; cursor: pointer; }
+.partsmenu .pop label:hover { background: var(--accent-soft); }
+.partsmenu .pop .hint { display: block; font-size: 11px; }
+.partsmenu .pop .foot { font-size: 11px; color: var(--muted); padding: 4px 8px 0; border-top: 1px solid var(--line); }
 </style>
 <script type="importmap">
 { "imports": {
@@ -290,14 +307,33 @@ li.sev-medium i { color: var(--warn) !important; }
     <div class="brand"><h1>DWG<b>2</b>BIM</h1><span>Kat planından mimari + tesisat BIM modeli</span></div>
     <div class="spacer"></div>
     <span class="filechip" id="fileChip">Dosya yok</span>
-    <button class="btn" id="btnHelp" title="Nasıl kullanılır?">Nasıl çalışır?</button>
     <label class="btn" for="fileInput">Dosya aç</label>
     <button class="btn primary" id="btnExportTop" disabled>IFC indir</button>
     <input type="file" id="fileInput" accept=".dwg,.dxf" hidden>
   </header>
 
   <div class="work">
-    <aside>
+    <aside class="side">
+      <div class="sidehead">
+        <b id="sideFile">Proje yok</b>
+        <span class="hint" id="sideSum">Demoyu açın ya da bir DWG/DXF dosyası seçin.</span>
+      </div>
+        <section class="agent" id="agentBox">
+          <p class="hint" id="agentIntro" hidden></p>
+          <p class="hint" id="agentUnavail">Claude sohbeti yalnız claude.ai içindeki sürümde çalışır (kendi aboneliğinizle, anahtarsız). Bu sürümde model otomatik algılamayla gösterilir; <a href="#" id="legacyLink">ayrıntılı ayarlar</a>.</p>
+          <div class="chat" id="chatLog" aria-live="polite"></div>
+          <div class="chatin">
+            <textarea id="chatIn" rows="2" placeholder="Ne yapayım? Örn. giriş kapısını işaretle, tavan 320 cm olsun, WC'deki boşluğu kapı yap, 3B göster…" aria-label="Claude'a mesaj"></textarea>
+            <button class="btn primary" id="chatSend" disabled>Gönder</button>
+          </div>
+          <div class="row">
+            <button class="btn small" id="agentReview" disabled>Projeyi yeniden incele</button>
+            <button class="btn small" id="agentStop" hidden>Durdur</button>
+            <span class="hint" id="agentTier"></span>
+          </div>
+          <div class="status" id="agentStatus"></div>
+        </section>
+      <div class="legacy" id="legacy" hidden>
       <nav class="stabs" role="tablist" aria-label="Paneller">
         <button class="stab on" role="tab" data-panel="pSum" id="stabSum">Özet</button>
         <button class="stab" role="tab" data-panel="pArch" id="stabArch">Mimari</button>
@@ -444,22 +480,6 @@ li.sev-medium i { color: var(--warn) !important; }
 
       <!-- ASİSTAN -->
       <div class="panel" id="pAi" role="tabpanel" hidden>
-        <section class="card-s" id="agentBox">
-          <h3>Claude ile çalış</h3>
-          <p class="hint" id="agentIntro">Claude projenin tamamına bakar, katman rollerini, ölçüleri, kapı/pencereleri, mahal adlarını ve tesisat profillerini kendisi ayarlar; sonra sohbetle değişiklik isteyebilirsiniz. Çağrılar claude.ai aboneliğinizden düşer; ilk çağrıda onay istenir, anahtar gerekmez.</p>
-          <p class="hint" id="agentUnavail">Bu özellik yalnız claude.ai içindeki sürümde çalışır (kendi aboneliğinizle, anahtarsız). Burada aşağıdaki kopyala-yapıştır yolunu kullanabilirsiniz.</p>
-          <div class="row">
-            <button class="btn primary" id="agentReview" disabled>Projeyi uçtan uca incele</button>
-            <button class="btn" id="agentStop" hidden>Durdur</button>
-            <span class="hint" id="agentTier"></span>
-          </div>
-          <div class="chat" id="chatLog" aria-live="polite"></div>
-          <div class="chatin">
-            <textarea id="chatIn" rows="2" placeholder="Örn. WC'deki O14 boşluğunu kapı yap, tavan 320 cm olsun, M-EMİŞ katmanı dönüş havası…" aria-label="Claude'a mesaj"></textarea>
-            <button class="btn primary" id="chatSend" disabled>Gönder</button>
-          </div>
-          <div class="status" id="agentStatus"></div>
-        </section>
         <section class="card-s" id="stepAi">
           <h3>Başka bir yapay zekâ ile (kopyala-yapıştır)</h3>
           <p class="hint">Program bütün projeyi ve emin olamadığı noktaları yapay zekâya anlatır. Yapay zekâ düzeltebildiklerini düzeltir, bir analiz raporu yazar ve genel kurallar önerir; kurallar bilgi bankasına eklenir, sonraki projelerde aynı soru sorulmaz.</p>
@@ -491,6 +511,7 @@ li.sev-medium i { color: var(--warn) !important; }
           </div>
         </section>
       </div>
+      </div>
     </aside>
 
     <main>
@@ -500,6 +521,10 @@ li.sev-medium i { color: var(--warn) !important; }
         <div class="vtools">
           <button class="btn small on" id="tglArch" title="Mimariyi göster/gizle">Mimari</button>
           <button class="btn small on" id="tglMep" title="Tesisatı göster/gizle">Tesisat</button>
+          <div class="partsmenu" id="partsMenu" hidden>
+            <button class="btn small" id="partsBtn" aria-haspopup="true" aria-expanded="false" title="Paftadaki çizim bölümleri">Bölümler ▾</button>
+            <div class="pop" id="partsPop" hidden></div>
+          </div>
         </div>
         <div class="legend" id="legend2d">
           <span><i class="dot" style="background:var(--wall-ext)"></i>Dış duvar</span>
@@ -575,18 +600,11 @@ li.sev-medium i { color: var(--warn) !important; }
         <div class="welcome" id="welcome" hidden>
           <div class="card" role="dialog" aria-labelledby="welcomeTitle">
             <h2 id="welcomeTitle">DWG<b>2</b>BIM</h2>
-            <p>AutoCAD kat planını (DWG/DXF) tarayıcıda okur; duvar, kolon, kapı, pencere, cam cephe, mahal, tefriş ve mekanik tesisatı tanıyıp 3B BIM modeline çevirir. <b>IFC</b> olarak indirirsiniz; Revit, FreeCAD ve Blender açar. Dosyanız bilgisayarınızdan çıkmaz.</p>
-            <ol>
-              <li><b>Dosyayı açın.</b> DWG/DXF'yi sürükleyip bırakın. Pafta ayrık çizim gruplarına bölünür, asıl plan ve katman rolleri otomatik seçilir.</li>
-              <li><b>Analiz ve yapay zekâ.</b> Program emin olamadığı noktaları listeler ve bir komut üretir; komutu Claude/ChatGPT'ye yapıştırın, cevabı geri yapıştırın. Düzeltmeler ve gezi rotası otomatik uygulanır. (İsterseniz bu adımı atlayın.)</li>
-              <li><b>İnceleyin, düzeltin, indirin.</b> Plan ve 3B görünümde öğelere tıklayarak tür ve ölçü değiştirin; <i>Otomatik gezi</i> ile içeride dolaşın; <i>IFC indir</i> ile alın.</li>
-            </ol>
+            <p>AutoCAD kat planından 3B BIM modeli. Dosyanızı açın; Claude projeyi elden geçirip gösterir, gerisini sohbetle istersiniz.</p>
             <div class="row">
-              <button class="btn primary" id="welcomeDemo">Demo binayı gör</button>
-              <label class="btn" for="fileInput">Kendi dosyamı aç</label>
-              <button class="btn" id="welcomeClose">Kapat</button>
+              <button class="btn primary big" id="welcomeDemo">Demoyu gör</button>
+              <label class="btn big" for="fileInput">Projeni aç</label>
             </div>
-            <span class="fine">Açık kaynak, sunucusuz. Tesisat kotu projede yoksa size sorulur; bilinmeyen katmanlar için bilgi bankası yapay zekâdan kural öğrenir.</span>
           </div>
         </div>
         <div class="overlay" id="overlay"><div class="card"><b>Çizim yükleniyor</b><span class="hint" id="overlayMsg">Örnek proje açılıyor…</span></div></div>

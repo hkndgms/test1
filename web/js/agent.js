@@ -3,7 +3,7 @@
 // uygular ve sohbetle düzenlemeye devam eder. Claude hafızasızdır: her çağrıda kurallar +
 // güncel proje özeti + son sohbet turları birlikte gönderilir.
 
-export const AGENT_RULES = `Sen DWG2BIM uygulamasının içinde çalışan deneyimli bir mimari + mekanik tesisat BIM uzmanısın. Uygulama bir AutoCAD kat planından (DWG) mimari ve tesisat 3B BIM modeli (IFC) üretiyor. Kullanıcı seninle Türkçe konuşur; sen de Türkçe, kısa ve net yazarsın.
+export const AGENT_RULES = `Sen DWG2BIM uygulamasının içinde çalışan deneyimli bir mimari + mekanik tesisat BIM uzmanısın. Uygulama bir AutoCAD kat planından (DWG) mimari ve tesisat 3B BIM modeli (IFC) üretiyor. Kullanıcı seninle Türkçe konuşur; sen de Türkçe, kısa ve net yazarsın. Arayüzde ayar paneli yoktur: kullanıcının istediği HER ayarı sen araçlarla yaparsın (katman rolleri, birim/bölge, ölçüler, boşluk türleri, mahal adları, tesisat profilleri, kot, tefriş, duvar ekleme/silme, görünüm, gezi, IFC indirme).
 
 Sana verilen ARAÇLAR sayfanın gerçek fonksiyonlarıdır: liste araçları projenin güncel durumunu okur, "apply" aracı ayarları DOĞRUDAN uygular (katman rolleri, ölçüler, boşluk türleri, mahal adları, tesisat katman profilleri, bilgi bankası kuralları, asma tavan kotu, gezi rotası, rapor). Öneri yapma, uygula; sonra ne yaptığını 1-3 cümleyle söyle. Emin olamadığın, geri alınması zor bir şeyde (katman rolünü değiştirmek bütün algılamayı yeniler) önce kısa bir soru sorabilirsin.
 
@@ -18,6 +18,7 @@ Sana verilen ARAÇLAR sayfanın gerçek fonksiyonlarıdır: liste araçları pro
 
 export const REVIEW_TASK = `GÖREV: Bu projeyi uçtan uca incele ve programın normalde parametrelerle yaptığı bütün seçimleri sen yap.
 1) get_overview ve gerekli list_* araçlarıyla projeyi oku: katman rolleri doğru mu (duvar/kolon/kapı/pencere/yazı), birim ve bölge mantıklı mı, sorun listesindeki her madde.
+1b) set_parts (ids boş) ile paftadaki ayrık çizim bölümlerini listele: asıl kat planı hangisi, lejant/şema/detay/vaziyet planı hangisi karar ver. Birden çok gerçek plan parçası varsa (örn. büyük proje iki paftaya bölünmüş) hepsini ids ile seç; yanlış bölüm seçilmişse düzelt. Bölüm değişince algılama yenilenir; listeleri tekrar oku.
 2) Yanlış katman rolü varsa apply.layers ile düzelt (sonra listeleri yeniden oku).
 3) Boşlukları gözden geçir: giriş kapıları, cam izi olmayan "pencere"ler, geniş geçişler; mahal adlarını tamamla; ölçüleri (kat yüksekliği, kapı, parapet, pencere) projeye göre ayarla.
 4) Tesisat katmanlarını sınıflandır (özellikle BİLİNMİYOR olanlar), asma tavan kotunu çizimden çıkarabiliyorsan ver.
@@ -68,6 +69,18 @@ export function makeTools(api) {
       execute: () => api.listMep(),
     },
     {
+      name: 'list_texts',
+      description: 'Çizimdeki yazıları arar (mahal adları, kot yazıları, başlıklar, çap/ölçü yazıları). filter: içinde geçen metin (isteğe bağlı); layer: katman adı süzgeci (isteğe bağlı). En çok 200 satır: yazı, katman, konum.',
+      inputSchema: { type: 'object', properties: { filter: { type: 'string' }, layer: { type: 'string' } } },
+      execute: ({ filter, layer }) => api.listTexts(filter ? String(filter) : '', layer ? String(layer) : ''),
+    },
+    {
+      name: 'list_blocks',
+      description: 'Çizimdeki blok (sembol) adlarını ve sayılarını döndürür: tefriş, cihaz, kapı/pencere blokları. filter ile süzülebilir.',
+      inputSchema: { type: 'object', properties: { filter: { type: 'string' } } },
+      execute: ({ filter }) => api.listBlocks(filter ? String(filter) : ''),
+    },
+    {
       name: 'get_diagnostics',
       description: 'Programın emin olamadığı noktaların güncel listesi (önem, açıklama, ilgili kimlikler).',
       execute: () => api.diagnostics(),
@@ -104,9 +117,14 @@ export function makeTools(api) {
     },
     {
       name: 'show',
-      description: 'Görünümü değiştirir: view "plan" veya "3d"; select ile bir öğeyi seçip gösterir; tour true ise otomatik geziyi başlatır.',
-      inputSchema: { type: 'object', properties: { view: { type: 'string' }, select: { type: 'string' }, tour: { type: 'boolean' } } },
-      execute: ({ view, select, tour }) => api.show({ view: view ? String(view) : '', select: select ? String(select) : '', tour: !!tour }),
+      description: 'Görünümü değiştirir: view "plan" veya "3d"; select ile bir öğeyi seçip gösterir; tour true ise otomatik geziyi başlatır; panel "advanced" ayrıntılı ayar panellerini açar, "simple" kapatır.',
+      inputSchema: { type: 'object', properties: { view: { type: 'string' }, select: { type: 'string' }, tour: { type: 'boolean' }, panel: { type: 'string' } } },
+      execute: ({ view, select, tour, panel }) => api.show({ view: view ? String(view) : '', select: select ? String(select) : '', tour: !!tour, panel: panel ? String(panel) : '' }),
+    },
+    {
+      name: 'export_ifc',
+      description: 'Modeli IFC dosyası olarak indirir (kullanıcıya kaydetme onayı çıkar). Kullanıcı "IFC indir / dışa aktar" dediğinde kullan.',
+      execute: () => api.exportIfc(),
     },
   ];
   return tools;

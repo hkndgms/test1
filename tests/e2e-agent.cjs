@@ -54,8 +54,10 @@ const { chromium } = require(process.env.PW || 'playwright');
   await page.waitForSelector('#welcome:not([hidden])', { timeout: 60000 });
   await page.click('#welcomeDemo');
   await page.waitForFunction(() => /lgılandı/.test(document.getElementById('status').textContent), null, { timeout: 120000 });
-  await page.click('#stabAi');
   await page.waitForFunction(() => !document.getElementById('agentReview').disabled, null, { timeout: 20000 });
+  console.log('intro:', (await page.textContent('#chatLog')).replace(/\s+/g, ' ').slice(0, 120));
+  console.log('side:', await page.textContent('#sideFile'), '|', await page.textContent('#sideSum'));
+  console.log('parts menu hidden (demo tek bölüm):', await page.$eval('#partsMenu', (e) => e.hidden), '| legacy hidden:', await page.$eval('#legacy', (e) => e.hidden));
   console.log('agent tier:', await page.textContent('#agentTier'));
   // uçtan uca inceleme
   await page.click('#agentReview');

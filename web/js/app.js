@@ -52,6 +52,7 @@ const state = {
   fixtures: [], // tanınan tefriş (klozet, lavabo, klima...)
   decorIgnored: 0,
   chat: [], // Claude ajan sohbeti (sayfa tutar; Claude hafızasız)
+  showLegacy: false, // ayrıntılı (eski) paneller
 };
 
 // ------------------------------------------------------------ yardımcılar
@@ -183,7 +184,7 @@ function onDrawing(d, secs) {
   state.aiReport = null;
   state.aiTour = null;
   // kendi dosyası: model gösterilmeden önce analiz + yapay zekâ ekranı
-  state.wizardActive = !state.isSample;
+  state.wizardActive = false; // analiz ekranı kaldırıldı: Claude dosyayı açılışta elden geçirir
   renderReport();
   $('ceilDlg').hidden = true;
   plan.setDrawing(d);
@@ -199,8 +200,24 @@ function onDrawing(d, secs) {
     const ign = state.islands?.length > 1 ? ` ${state.islands.length - 1} ayrık çizim grubu yok sayıldı.` : '';
     status(`Okundu (${secs} sn) ve algılandı.${ign} ${state.unitNote || 'Plandaki öğelere tıklayarak düzenleyebilirsiniz.'}`, 'ok');
   }
+  renderSide();
   if (state.isSample && !state.demoDone) runDemo();
-  else if (state.wizardActive) openWizard();
+  else agentUi.autoReview();
+}
+
+// Sol üst: dosya adı + tek satır özet
+function renderSide() {
+  $('sideFile').textContent = state.drawing ? (state.isSample ? 'Demo binası' : state.fileName) : 'Proje yok';
+  const m = state.model;
+  if (!m) { $('sideSum').textContent = ''; return; }
+  const ov = state.overrides;
+  const live = (arr) => arr.filter((x) => !ov[x.id]?.deleted);
+  const ops = live(m.openings);
+  const parts = [`${live(m.walls).length} duvar`, `${live(m.rooms).length} mahal`, `${ops.filter((o) => effKind(o) === 'door').length} kapı`, `${ops.filter((o) => effKind(o) === 'window').length} pencere`];
+  if (m.curtains?.length) parts.push(`${live(m.curtains).length} cam cephe`);
+  if (state.fixtures.length) parts.push(`${state.fixtures.filter((f) => !ov[f.id]?.deleted).length} tefriş`);
+  if (mepCount()) parts.push(`${mepCount()} tesisat öğesi`);
+  $('sideSum').textContent = parts.join(' · ');
 }
 
 // ------------------------------------------------------------ açılış demosu
@@ -213,14 +230,13 @@ function runDemo() {
   } catch (e) {
     console.warn('demo cevabı uygulanamadı', e);
   }
-  $('demoBar').hidden = false;
   showTab('3d');
+  agentUi.intro('Bu bir demo binası: cam giydirme cepheli giriş holü, toplantı, mutfak, ofisler, WC grubu, teknik hacim; tefriş, klima ve borular. Üstteki Plan/3B ile görünümü değiştirin, "Otomatik gezi" ile içeride dolaşın, "IFC indir" ile alın. Kendi dosyanızı açınca projeyi önce ben elden geçiririm; sonra buradan yazarak her şeyi değiştirebilirsiniz.');
 }
 $('demoClose').onclick = () => { $('demoBar').hidden = true; };
 $('btnDemo').onclick = loadDemo;
 $('welcomeDemo').onclick = loadDemo;
-$('welcomeClose').onclick = () => { $('welcome').hidden = true; };
-$('btnHelp').onclick = () => { $('welcome').hidden = false; };
+
 
 // ------------------------------------------------------------ analiz + yapay zekâ ekranı
 function openWizard() {
@@ -401,7 +417,36 @@ function renderParts() {
   }).join('');
   const n = state._partList.filter((i) => sel.has(i.id)).reduce((s, i) => s + i.n, 0);
   $('partsNote').textContent = n > 300000 ? `Seçili bölümlerde ${n.toLocaleString('tr')} nesne var; işlem birkaç saniye sürebilir.` : '';
+  renderPartsMenu();
 }
+
+// Plan/3B yanındaki "Bölümler" menüsü: aynı liste, tik atınca hemen işlenir
+function renderPartsMenu() {
+  const menu = $('partsMenu');
+  const list = state._partList || [];
+  if (!state.drawing || list.length < 2) { menu.hidden = true; return; }
+  menu.hidden = false;
+  const toCm = UNIT_TO_CM[state.units] ?? 1;
+  const cur = new Set(state.parts.length ? state.parts : state.planIsland ? [state.planIsland.id] : []);
+  $('partsBtn').textContent = `Bölümler ${cur.size}/${list.length} ▾`;
+  $('partsPop').innerHTML = list.map((i) => {
+    const w = ((i.bbox[2] - i.bbox[0]) * toCm / 100).toFixed(0), h = ((i.bbox[3] - i.bbox[1]) * toCm / 100).toFixed(0);
+    const tags = [i._w ? `duvar ${i._w}` : '', i._m ? `tesisat ${i._m}` : ''].filter(Boolean).join(' · ') || 'yalnız çizim/yazı';
+    return `<label><input type="checkbox" data-mpart="${i.id}" ${cur.has(i.id) ? 'checked' : ''}><span><b>${esc(i.label || 'Bölüm ' + i.id)}</b><span class="hint">${w}×${h} m · ${i.n.toLocaleString('tr')} nesne · ${tags}</span></span></label>`;
+  }).join('') + '<div class="foot">Claude açılışta asıl planı seçer; burada elle değiştirebilirsiniz.</div>';
+}
+$('partsBtn').onclick = () => { const p = $('partsPop'); p.hidden = !p.hidden; $('partsBtn').setAttribute('aria-expanded', String(!p.hidden)); };
+document.addEventListener('click', (e) => { if (!$('partsMenu').contains(e.target)) { $('partsPop').hidden = true; $('partsBtn').setAttribute('aria-expanded', 'false'); } });
+$('partsPop').addEventListener('change', (e) => {
+  const id = +e.target.dataset.mpart;
+  if (!id) return;
+  const cur = new Set(state.parts.length ? state.parts : state.planIsland ? [state.planIsland.id] : []);
+  if (e.target.checked) cur.add(id); else cur.delete(id);
+  if (!cur.size) { e.target.checked = true; return; }
+  state.parts = [...cur];
+  renderParts();
+  processParts(state.parts);
+});
 $('partsList').addEventListener('click', (e) => {
   const z = +e.target.dataset.zoom;
   if (z) { const isl = state.islands.find((i) => i.id === z); if (isl) { showTab('plan'); plan.fit(isl.bbox); } }
@@ -696,6 +741,7 @@ function renderStats() {
     if (state.decorIgnored) extra.push(`${state.decorIgnored} süs çizimi yok sayıldı`);
     $('resultNote').textContent = m.walls.length ? `${ext} dış, ${walls.length - ext} iç duvar · mahaller toplam ${area.toFixed(1)} m²${extra.length ? ' · ' + extra.join(' · ') : ''}` : 'Mimari bulunamadı (yalnız tesisat).';
   }
+  if ($('sideFile')) renderSide();
 }
 
 function buildAll() {
@@ -912,6 +958,7 @@ $('ceilCands').addEventListener('click', (e) => { const v = +e.target.dataset.cm
 
 // Projede kot yoksa kullanıcıya sor
 function askCeiling() {
+  if (!state.showLegacy) return; // sade arayüz: kot sorusu yok, Claude ya da sohbet belirler
   state.ceilingAsked = true;
   const c = state.elevations?.candidates || [];
   $('ceilDlgCm').value = state.ceiling.cm;
@@ -1192,6 +1239,21 @@ const agentApi = {
     const sum = mepSummary();
     return `çıkarılan: ${state.mep?.pipes.length || 0} boru, ${state.mep?.ducts.length || 0} kanal, ${state.mep?.boxes.length || 0} cihaz/uç birim; asma tavan ${state.ceiling.cm} cm (${state.ceiling.source})\nsistemler: ${[...sum.entries()].map(([k, v]) => `${(SYSTEMS[k] || SYSTEMS.other).label}${v.pipeM ? ' ' + v.pipeM.toFixed(0) + ' m' : ''}${v.n ? ' ' + v.n + ' ad.' : ''}`).join(', ') || '-'}\nkatman\tiçerik\tprofil\n` + (rows.join('\n') || '(tesisat katmanı yok)');
   },
+  listTexts: (filter, layer) => {
+    const d = state.drawing, f = filter.toLocaleLowerCase('tr'), lf = layer.toLocaleLowerCase('tr');
+    const inR = (t) => !state.autoRegion || state.region || (t.x >= (state.autoRegion[0]) && t.x <= state.autoRegion[2] && t.y >= state.autoRegion[1] && t.y <= state.autoRegion[3]);
+    const rows = d.texts.filter((t) => t.s && (!f || t.s.toLocaleLowerCase('tr').includes(f)) && (!lf || (d.layers[t.l]?.name || '').toLocaleLowerCase('tr').includes(lf)))
+      .sort((a, b) => Number(inR(b)) - Number(inR(a)) || b.h - a.h).slice(0, 200)
+      .map((t) => `${t.s.slice(0, 80)}\t${d.layers[t.l]?.name || ''}\t(${t.x.toFixed(0)}, ${t.y.toFixed(0)})${inR(t) ? '' : '\t[plan bölgesi dışında]'}`);
+    return `toplam ${d.texts.length} yazı; gösterilen ${rows.length}\nyazı\tkatman\tkonum\n` + (rows.join('\n') || '(yok)');
+  },
+  listBlocks: (filter) => {
+    const d = state.drawing, f = filter.toLocaleLowerCase('tr');
+    const cnt = new Map();
+    for (const it of d.instances || []) { const n = it.name.replace(/^.*\$0\$/, ''); if (!f || n.toLocaleLowerCase('tr').includes(f)) cnt.set(n, (cnt.get(n) || 0) + 1); }
+    const rows = [...cnt].sort((a, b) => b[1] - a[1]).slice(0, 150).map(([n, c]) => `${n}\t${c}`);
+    return 'blok adı\tadet\n' + (rows.join('\n') || '(blok yok)');
+  },
   diagnostics: () => diagnose(state).map((x, i) => `${i + 1}. [${x.severity}] ${x.text}${x.data?.length && x.data.length <= 40 ? ' (' + x.data.join(', ') + ')' : ''}`).join('\n') || 'Belirgin sorun yok.',
   apply: (changes) => applyAnswer(changes),
   deleteElements: (ids) => {
@@ -1218,14 +1280,17 @@ const agentApi = {
   setParts: (ids) => {
     const list = partStats().map((i) => `${i.id}\t${i.label || 'Bölüm ' + i.id}\t${Math.round((i.bbox[2] - i.bbox[0]) * (UNIT_TO_CM[state.units] ?? 1) / 100)}×${Math.round((i.bbox[3] - i.bbox[1]) * (UNIT_TO_CM[state.units] ?? 1) / 100)} m\t${i.n} nesne\tduvar çizgisi ${i._w}, tesisat ${i._m}${state.parts?.includes(i.id) || state.planIsland?.id === i.id ? '\t(seçili)' : ''}`);
     if (ids && ids.length) {
-      const valid = ids.filter((id) => state.islands.some((i) => i.id === id));
+      const valid = ids.map(Number).filter((id) => state.islands.some((i) => i.id === id));
       if (!valid.length) throw new Error('geçerli bölüm kimliği yok');
       state.parts = valid; processParts(valid);
       return `${valid.length} bölüm işleniyor: ${valid.join(', ')} (algılama yenilendi; listeleri tekrar oku)`;
     }
     return 'id\tad\tboyut\tnesne\tiçerik\n' + (list.join('\n') || '(tek bölüm)');
   },
-  show: ({ view, select: sel, tour }) => {
+  exportIfc: async () => { await exportIfc(); return $('status').textContent || 'IFC hazırlandı'; },
+  show: ({ view, select: sel, tour, panel }) => {
+    if (panel === 'advanced' || panel === 'ayrintili') agentUi.toggleLegacy(true);
+    if (panel === 'simple' || panel === 'sade') agentUi.toggleLegacy(false);
     if (view === '3d' || view === 'plan') showTab(view);
     if (sel) { if (!findById(state.model, sel) && !state.fixtures.some((f) => f.id === sel)) throw new Error(sel + ' bulunamadı'); select(sel); if (state.tab === 'plan') plan.fitModel(); }
     if (tour) startTour();
@@ -1269,7 +1334,23 @@ const agentUi = (() => {
       return null;
     } finally { setBusy(false); ctl = null; }
   }
-  function disable() { $('agentBox').classList.add('off'); $('agentUnavail').hidden = false; $('agentIntro').hidden = true; $('agentReview').hidden = true; $('chatSend').hidden = true; $('chatIn').hidden = true; $('wizClaude').hidden = true; $('btnAsk').hidden = true; }
+  function disable() { $('agentBox').classList.add('off'); $('agentUnavail').hidden = false; $('agentReview').hidden = true; $('chatSend').hidden = true; $('chatIn').hidden = true; $('wizClaude').hidden = true; $('btnAsk').hidden = true; }
+  const intro = (text) => addMsg('ai', text);
+  const REVIEW_SHOWN = 'Projeyi uçtan uca incele ve gerekli ayarları yap.';
+  // dosya açılınca: Claude varsa önce elden geçirir (ilk çağrıda claude.ai onay sorar), sonra model gösterilir
+  async function autoReview() {
+    if (!state.drawing) return;
+    if (!sample) {
+      showTab('3d');
+      intro(`${state.fileName} açıldı ve otomatik algılandı. Bu sürümde Claude sohbeti yok; claude.ai içindeki sürümde projeyi Claude elden geçirir ve yazdıklarınızı uygular.`);
+      return;
+    }
+    showTab('plan');
+    intro(`${state.fileName} açıldı. Şimdi projeyi uçtan uca inceliyorum: katman rolleri, birim, kapı/pencereler, mahal adları, tesisat katmanları ve kot. İlk seferinde claude.ai izin soracak; bu 1-3 dakika sürebilir.`);
+    const r = await run(REVIEW_TASK, { tier: 'complex', shown: REVIEW_SHOWN });
+    showTab('3d');
+    if (r) intro('İnceleme bitti ve ayarlar uygulandı. Buradan yazarak devam edin: ör. "giriş kapısı O5 olsun", "tavan 320 cm", "M-EMİŞ dönüş havası", "WC\'ye pisuvar ekleme, F3\'ü sil", "geziyi başlat".');
+  }
   capSample.then(async (sm) => {
     if (!sm) return disable();
     const lim = await sm.limits().catch(() => null);
@@ -1277,11 +1358,11 @@ const agentUi = (() => {
     sample = sm;
     tools = wrapTools(makeTools(agentApi)).slice(0, lim.tools.maxCount || 20);
     $('agentUnavail').hidden = true; $('agentIntro').hidden = false;
-    $('agentTier').textContent = `${tools.length} araç hazır · kullanım aboneliğinizden düşer`;
+    $('agentTier').textContent = 'Claude · aboneliğinizle, anahtarsız';
     setBusy(false);
     // analiz ekranı: uçtan uca inceleme, sonra 3B
     const w = $('wizClaude');
-    w.hidden = false;
+    w.hidden = true;
     w.textContent = 'Claude projeyi uçtan uca incelesin';
     w.onclick = async () => {
       if (!state.drawing || busy) return;
@@ -1296,7 +1377,10 @@ const agentUi = (() => {
     const b = $('btnAsk');
     b.hidden = true; // ajan modu varken kopyala-yapıştır yolundaki kısayol gereksiz
   });
-  $('agentReview').onclick = () => run(REVIEW_TASK, { tier: 'complex', shown: 'Projeyi uçtan uca incele ve gerekli ayarları yap.' });
+  $('agentReview').onclick = () => run(REVIEW_TASK, { tier: 'complex', shown: REVIEW_SHOWN });
+  const toggleLegacy = (on) => { state.showLegacy = on ?? $('legacy').hidden; $('legacy').hidden = !state.showLegacy; if (state.showLegacy) showPanel('pSum'); };
+  $('legacyLink').onclick = (e) => { e.preventDefault(); toggleLegacy(true); };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('legacy').hidden) toggleLegacy(false); });
   $('agentStop').onclick = () => ctl?.abort();
   const send = () => { const t = $('chatIn').value.trim(); if (!t) return; $('chatIn').value = ''; run(t); };
   $('chatSend').onclick = send;
@@ -1304,6 +1388,7 @@ const agentUi = (() => {
   return {
     onDrawing() { state.chat = []; log.innerHTML = ''; setStatus($('agentStatus'), ''); if (sample) setBusy(false); },
     available: () => !!sample,
+    intro, autoReview, toggleLegacy,
   };
 })();
 

@@ -79,6 +79,7 @@ const { chromium } = require(process.env.PW || 'playwright');
   await page.click('#tabPlan');
   // yapay zekâ komutu
   console.log('todo:', (await page.textContent('#todo')).replace(/\s+/g, ' ').slice(0, 400));
+  await page.click('#legacyLink'); // ayrıntılı paneller (sade arayüzde gizli)
   await page.click('#stabAi');
   await page.click('#btnPrompt');
   const prompt = await page.inputValue('#promptOut');
