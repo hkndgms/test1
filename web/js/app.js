@@ -1815,11 +1815,9 @@ const agentUi = (() => {
       intro(`${state.fileName} açıldı ve otomatik algılandı. Bu sürümde Claude sohbeti yok; claude.ai içindeki sürümde projeyi Claude elden geçirir ve yazdıklarınızı uygular.`);
       return;
     }
-    showTab('plan');
-    intro(`${state.fileName} açıldı. Şimdi projeyi uçtan uca inceliyorum: katman rolleri, birim, kapı/pencereler, mahal adları, tesisat katmanları ve kot. İlk seferinde claude.ai izin soracak; bu 1-3 dakika sürebilir.`);
-    const r = await run(REVIEW_TASK, { tier: 'complex', shown: REVIEW_SHOWN });
+    // açılışta Claude'a otomatik komut verilmez (uzun sürüyor); kullanıcı isterse "Projeyi incele" ya da sohbet
     showTab('3d');
-    if (r) intro('İnceleme bitti ve ayarlar uygulandı. Buradan yazarak devam edin: ör. "giriş kapısı O5 olsun", "tavan 320 cm", "M-EMİŞ dönüş havası", "WC\'ye pisuvar ekleme, F3\'ü sil", "geziyi başlat".');
+    intro(`${state.fileName} açıldı ve otomatik algılandı: ${$('sideSum').textContent || ''}. İstersen "Projeyi incele" düğmesiyle bütün projeyi elden geçireyim (1-3 dk), ya da doğrudan yaz: "R4'ün kapılarını kontrol et", "tavan 320 cm", "buraya masa sandalye koy"…`);
   }
   capSample.then(async (sm) => {
     if (!sm) return disable();
