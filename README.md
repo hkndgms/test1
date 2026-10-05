@@ -36,7 +36,8 @@ Sunucu veya bulut gerekmez; dosyalar kullanıcının bilgisayarından çıkmaz.
 4. **Düzenleme:** Plana tıklanan boşluğun türü değiştirilebilir (pencere / kapı / geçiş). Yükseklik ve parapet ayarlanabilir, öğe silinebilir, mahal adı değiştirilebilir.
 5. **Önizleme:** 3B olarak gösterir (three.js). Kapılar kasa + 90° açık kanat + kol, pencereler denizlik + kasa + kayıt + cam, cam cepheler dikme + cam olarak parçalı çizilir; her parça kendi malzemesiyle.
 6. **Dışa aktarma:** **IFC4** dosyası üretir. Revit'te *Dosya › Aç › IFC* ile açılıp *Farklı Kaydet › RVT* yapılabilir. FreeCAD ve Blender (Bonsai) ile de açılır.
-7. **Yapay zekâ asistanı:** Çizimin özetini ve talimatları içeren bir komut üretir. Komut bir yapay zekâya (Claude, ChatGPT…) yapıştırılır, gelen JSON cevabı uygulamaya geri yapıştırılır. Katmanlar, ölçüler, kapı/pencere türleri ve mahal adları otomatik ayarlanır.
+7. **Claude ajan modu (claude.ai içindeki sürümde, abonelikle, anahtarsız):** Asistan sekmesinde **"Projeyi uçtan uca incele"** ile Claude, sayfanın araçlarını kendisi çağırarak projeyi okur (`get_overview`, `list_layers`, `list_openings`, `list_rooms`, `list_walls`, `list_fixtures`, `list_mep`, `get_diagnostics`) ve kararları doğrudan uygular (`apply`: katman rolleri, ölçüler, boşluk türleri, mahal adları, tesisat profilleri, bilgi bankası kuralları, kot, gezi rotası, rapor; ayrıca `delete_elements`, `set_fixture`, `add_wall`, `set_parts`, `show`). Sonra **sohbet** kutusundan yazılan her istek ("O14'ü kapı yap", "tavan 320 cm") aynı araçlarla projeye uygulanır; araç çağrıları günlükte görünür. Çağrılar claude.ai'nin `sample` yeteneğiyle kullanıcının kendi hesabından yapılır: ilk çağrıda onay istenir, API anahtarı ya da kullandıkça ödeme yoktur; sayfa kapanınca hiçbir şey kalmaz. Claude hafızasızdır: her çağrıda kurallar + güncel proje özeti + son sohbet turları yeniden gönderilir (`web/js/agent.js`). Analiz ekranındaki "Claude projeyi uçtan uca incelesin" düğmesi aynı incelemeyi yapıp 3B'yi açar.
+   **Diğer yapay zekâlar (kopyala-yapıştır):** Çizimin özetini ve talimatları içeren bir komut üretilir; cevaptaki JSON uygulamaya geri yapıştırılır. GitHub Pages sürümünde yalnız bu yol vardır (abonelik OAuth'u üçüncü taraf sayfalarda kullanılamaz; API anahtarı yolu bilinçli olarak eklenmedi).
 8. **Mekanik tesisat:** Tesisat katmanları bilgi bankasıyla sınıflandırılır ve aşağıdaki gibi 3B'ye ve IFC'ye aktarılır:
    - **Borular** (soğuk/sıcak su, pis su, yağmur, VRF, sprinkler…): tek çizgilerden. Çap, yakındaki Ø/DN yazısından okunur.
    - **Kanal ve menfezler:** kapalı şekillerden.
@@ -64,7 +65,8 @@ web/                  uygulama (derleme adımı yok, doğrudan yayınlanır)
   js/ifc.js           IFC4 STEP yazıcı
   js/view2d.js        plan görüntüleyici (canvas)
   js/view3d.js        3B görüntüleyici (three.js)
-  js/ai-prompt.js     yapay zekâ komutu üretme / cevap çözümleme
+  js/ai-prompt.js     çizim özeti (buildSnapshot) + kopyala-yapıştır komutu / cevap çözümleme
+  js/agent.js         Claude ajan modu: araç tanımları, kurallar, inceleme görevi
   js/rvt.js           RVT (OLE/CFB) bilgi okuyucu
   js/islands.js       paftayı ayrık çizim gruplarına bölme
   js/auto.js          asıl plan, katman rolleri ve birim tahmini
@@ -104,6 +106,8 @@ node tests/openings-evidence.mjs dosya.dwg
 node tests/summary.mjs a.dwg b.dwg
 # Uçtan uca tarayıcı testi (playwright gerekir; EXTRA=dosya.dwg ile ek dosya yükler)
 node tests/e2e.cjs http://localhost:8000/ /tmp
+# Ajan modu testi (claude.ai `sample` yeteneği taklit edilir; araç bağlantısı ve sohbet akışı)
+node tests/e2e-agent.cjs http://localhost:8000/ /tmp
 ```
 
 ## Sınırlamalar (ilk sürüm)

@@ -4,7 +4,9 @@
 import { UNIT_NAMES } from './detect.js';
 import { SYSTEMS, KINDS } from './kb.js';
 
-export function buildPrompt({ drawing, roles, params, buildParams, model, fileName, mepStats = [], mepProfiles = new Map(), elevations = null, ceiling = null, islands = [], diagnostics = [], mep = null, fixtures = [] }) {
+// Çizim özeti (yapay zekâya giden veri kısmı): katmanlar, bloklar, yazılar, algılama sonucu,
+// sorunlar, tesisat katmanları, kot. Hem kopyala-yapıştır komutu hem de ajan modu bunu kullanır.
+export function buildSnapshot({ drawing, roles, params, buildParams, model, fileName, mepStats = [], mepProfiles = new Map(), elevations = null, ceiling = null, islands = [], diagnostics = [], mep = null, fixtures = [] }) {
   const layerRows = drawing.layers
     .map((l, i) => ({ i, ...l }))
     .filter((l) => l.count > 0)
@@ -36,7 +38,52 @@ export function buildPrompt({ drawing, roles, params, buildParams, model, fileNa
   const diagRows = diagnostics.map((x, i) => `${i + 1}. [${x.severity}] ${x.text}${x.data && x.data.length && x.data.length <= 40 ? ' (' + x.data.join(', ') + ')' : ''}`);
   const named = mep ? [...new Set(mep.boxes.filter((b) => b.name).map((b) => b.name))].slice(0, 30) : [];
 
-  return `Sen deneyimli bir mimari ve MEKANİK TESİSAT BIM uzmanısın. "DWG2BIM" adlı bir tarayıcı uygulaması bir AutoCAD DWG paftasından mimari + mekanik tesisat 3B BIM modeli (IFC) üretiyor. Aşağıda uygulamanın çizimden çıkardığı özet ve kendi tespit ettiği SORUNLAR var.
+  return `ÇİZİM ÖZETİ
+Dosya: ${fileName || '-'}
+Birim: ${UNIT_NAMES[drawing.units] || drawing.units} (INSUNITS=${drawing.units})
+Mevcut ayarlar: duvar yüksekliği ${buildParams.wallHeightCm} cm, kapı ${buildParams.doorHeightCm} cm, parapet ${buildParams.windowSillCm} cm, pencere ${buildParams.windowHeightCm} cm, kalınlık aralığı ${params.minThicknessCm}-${params.maxThicknessCm} cm
+
+KATMANLAR (ad, nesne sayısı, şu anki rol)
+${layerRows.join('\n')}
+
+ÜST SEVİYE BLOKLAR
+${blocks.join(', ') || '-'}
+
+ÇİZİMDEKİ YAZILARDAN ÖRNEKLER
+${texts.join(' | ') || '-'}
+
+ALGILAMA SONUCU
+Duvar: ${model?.walls.length ?? 0} adet, kalınlık dağılımı (cm: adet): ${Object.entries(th).map(([k, v]) => `${k}: ${v}`).join(', ') || '-'}
+Kolon: ${model?.columns.length ?? 0} adet
+Cam giydirme cephe / cam bölme: ${model?.curtains?.length ?? 0} şerit
+Tefriş (blok adından / ıslak hacim kümesinden tanınan): ${Object.entries(fixtures.reduce((a, f) => ((a[f.label] = (a[f.label] || 0) + 1), a), {})).map(([k, v]) => `${k} ${v}`).join(', ') || '-'}
+Boşluklar (id, genişlik cm, konum, şu anki tür):
+${openingRows.join('\n') || '-'}
+Mahaller (id, alan, ad):
+${roomRows.join('\n') || '-'}
+
+PROGRAMIN TESPİT ETTİĞİ SORUNLAR VE BELİRSİZLİKLER
+${diagRows.join('\n') || 'Belirgin sorun bulunmadı; yine de bütün projeyi kontrol et.'}
+
+ADIYLA TANINAN CİHAZ BLOKLARI
+${named.join(', ') || '-'}
+
+TESİSAT KATMANLARI (asıl plan bölgesinde; ad, içerik özeti → uygulamanın şu anki kararı [kaynak])
+${mepRows.join('\n') || '-'}
+
+KOT BİLGİSİ
+Asma tavan kotu: ${ceiling ? (ceiling.source === 'project' ? ceiling.cm + ' cm (projeden: ' + ceiling.text + ')' : ceiling.source === 'default' ? 'projede bulunamadı (varsayılan ' + ceiling.cm + ' cm)' : ceiling.cm + ' cm (' + ceiling.source + ')') : '-'}
+Çizimde geçen kot yazıları: ${kotRows || '-'}
+Paftadaki ayrık çizim grubu sayısı: ${islands.length} (asıl plan dışındakiler yok sayıldı)
+`;
+}
+
+// Kopyala-yapıştır komutu: talimatlar + istenen JSON biçimi + çizim özeti
+export function buildPrompt(opts) {
+  return INSTRUCTIONS + '\n' + buildSnapshot(opts);
+}
+
+const INSTRUCTIONS = `Sen deneyimli bir mimari ve MEKANİK TESİSAT BIM uzmanısın. "DWG2BIM" adlı bir tarayıcı uygulaması bir AutoCAD DWG paftasından mimari + mekanik tesisat 3B BIM modeli (IFC) üretiyor. Aşağıda uygulamanın çizimden çıkardığı özet ve kendi tespit ettiği SORUNLAR var.
 Görevin bütün projeyi bir uzman gözüyle ANALİZ ETMEK:
 1) Programın listelediği sorun ve belirsizliklerin her birini değerlendir; düzeltebildiklerini aşağıdaki JSON alanlarıyla doğrudan düzelt.
 2) Programın görmediği tutarsızlıkları da ara (ör. yanlış sistem atanmış katman, mantıksız kot, eksik giriş kapısı, şema/lejant olabilecek katmanlar, tesisatta eksik sistem).
@@ -95,46 +142,7 @@ ANALİZ ÇIKTISI
   "notes": "kısa açıklama"
 }
 \`\`\`
-
-ÇİZİM ÖZETİ
-Dosya: ${fileName || '-'}
-Birim: ${UNIT_NAMES[drawing.units] || drawing.units} (INSUNITS=${drawing.units})
-Mevcut ayarlar: duvar yüksekliği ${buildParams.wallHeightCm} cm, kapı ${buildParams.doorHeightCm} cm, parapet ${buildParams.windowSillCm} cm, pencere ${buildParams.windowHeightCm} cm, kalınlık aralığı ${params.minThicknessCm}-${params.maxThicknessCm} cm
-
-KATMANLAR (ad, nesne sayısı, şu anki rol)
-${layerRows.join('\n')}
-
-ÜST SEVİYE BLOKLAR
-${blocks.join(', ') || '-'}
-
-ÇİZİMDEKİ YAZILARDAN ÖRNEKLER
-${texts.join(' | ') || '-'}
-
-ALGILAMA SONUCU
-Duvar: ${model?.walls.length ?? 0} adet, kalınlık dağılımı (cm: adet): ${Object.entries(th).map(([k, v]) => `${k}: ${v}`).join(', ') || '-'}
-Kolon: ${model?.columns.length ?? 0} adet
-Cam giydirme cephe / cam bölme: ${model?.curtains?.length ?? 0} şerit
-Tefriş (blok adından / ıslak hacim kümesinden tanınan): ${Object.entries(fixtures.reduce((a, f) => ((a[f.label] = (a[f.label] || 0) + 1), a), {})).map(([k, v]) => `${k} ${v}`).join(', ') || '-'}
-Boşluklar (id, genişlik cm, konum, şu anki tür):
-${openingRows.join('\n') || '-'}
-Mahaller (id, alan, ad):
-${roomRows.join('\n') || '-'}
-
-PROGRAMIN TESPİT ETTİĞİ SORUNLAR VE BELİRSİZLİKLER
-${diagRows.join('\n') || 'Belirgin sorun bulunmadı; yine de bütün projeyi kontrol et.'}
-
-ADIYLA TANINAN CİHAZ BLOKLARI
-${named.join(', ') || '-'}
-
-TESİSAT KATMANLARI (asıl plan bölgesinde; ad, içerik özeti → uygulamanın şu anki kararı [kaynak])
-${mepRows.join('\n') || '-'}
-
-KOT BİLGİSİ
-Asma tavan kotu: ${ceiling ? (ceiling.source === 'project' ? ceiling.cm + ' cm (projeden: ' + ceiling.text + ')' : ceiling.source === 'default' ? 'projede bulunamadı (varsayılan ' + ceiling.cm + ' cm)' : ceiling.cm + ' cm (' + ceiling.source + ')') : '-'}
-Çizimde geçen kot yazıları: ${kotRows || '-'}
-Paftadaki ayrık çizim grubu sayısı: ${islands.length} (asıl plan dışındakiler yok sayıldı)
 `;
-}
 
 export function parseAnswer(text) {
   if (!text || !text.trim()) throw new Error('Cevap boş.');

@@ -257,6 +257,17 @@ li.sev-medium i { color: var(--warn) !important; }
 .welcome ol b { color: var(--ink); }
 .welcome .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .welcome .fine { font-size: 12px; color: var(--muted); }
+
+.chat { display: grid; gap: 6px; max-height: 42vh; overflow: auto; padding: 2px; }
+.chat:empty { display: none; }
+.chat .msg { padding: 8px 10px; border-radius: var(--r); font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.chat .msg.user { background: var(--accent-soft); margin-left: 18px; }
+.chat .msg.ai { background: var(--field); border: 1px solid var(--line); margin-right: 18px; }
+.chat .msg.tool { font: 11px/1.4 var(--font-mono); color: var(--muted); padding: 2px 10px; }
+.chat .msg.tool::before { content: '⚙ '; }
+.chat .msg.err { color: var(--bad); }
+.chatin { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; }
+.chatin textarea { min-height: 44px; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -424,8 +435,24 @@ li.sev-medium i { color: var(--warn) !important; }
 
       <!-- ASİSTAN -->
       <div class="panel" id="pAi" role="tabpanel" hidden>
+        <section class="card-s" id="agentBox">
+          <h3>Claude ile çalış</h3>
+          <p class="hint" id="agentIntro">Claude projenin tamamına bakar, katman rollerini, ölçüleri, kapı/pencereleri, mahal adlarını ve tesisat profillerini kendisi ayarlar; sonra sohbetle değişiklik isteyebilirsiniz. Çağrılar claude.ai aboneliğinizden düşer; ilk çağrıda onay istenir, anahtar gerekmez.</p>
+          <p class="hint" id="agentUnavail">Bu özellik yalnız claude.ai içindeki sürümde çalışır (kendi aboneliğinizle, anahtarsız). Burada aşağıdaki kopyala-yapıştır yolunu kullanabilirsiniz.</p>
+          <div class="row">
+            <button class="btn primary" id="agentReview" disabled>Projeyi uçtan uca incele</button>
+            <button class="btn" id="agentStop" hidden>Durdur</button>
+            <span class="hint" id="agentTier"></span>
+          </div>
+          <div class="chat" id="chatLog" aria-live="polite"></div>
+          <div class="chatin">
+            <textarea id="chatIn" rows="2" placeholder="Örn. WC'deki O14 boşluğunu kapı yap, tavan 320 cm olsun, M-EMİŞ katmanı dönüş havası…" aria-label="Claude'a mesaj"></textarea>
+            <button class="btn primary" id="chatSend" disabled>Gönder</button>
+          </div>
+          <div class="status" id="agentStatus"></div>
+        </section>
         <section class="card-s" id="stepAi">
-          <h3>Yapay zekâ ile proje analizi</h3>
+          <h3>Başka bir yapay zekâ ile (kopyala-yapıştır)</h3>
           <p class="hint">Program bütün projeyi ve emin olamadığı noktaları yapay zekâya anlatır. Yapay zekâ düzeltebildiklerini düzeltir, bir analiz raporu yazar ve genel kurallar önerir; kurallar bilgi bankasına eklenir, sonraki projelerde aynı soru sorulmaz.</p>
           <ol class="steps">
             <li><button class="btn primary" id="btnPrompt" disabled>Analiz komutunu kopyala</button>

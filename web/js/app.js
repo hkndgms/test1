@@ -1,6 +1,6 @@
 // DWG2BIM ana uygulama: dosya okuma, katman rolleri, algılama, düzenleme,
 // 3B önizleme, IFC dışa aktarma, yapay zekâ asistanı ve RVT inceleme.
-import { detect, DEFAULT_PARAMS, UNIT_NAMES, UNIT_TO_CM } from './detect.js';
+import { detect, DEFAULT_PARAMS, UNIT_NAMES, UNIT_TO_CM, pointInPoly } from './detect.js';
 import { autoSetup } from './auto.js';
 import { padBox } from './islands.js';
 import { KnowledgeBase, SYSTEMS, KINDS, fold } from './kb.js';
@@ -9,7 +9,8 @@ import { buildSolids, DEFAULT_BUILD } from './build3d.js';
 import { writeIfc } from './ifc.js';
 import { makeZip } from './zip.js';
 import { Plan2D, findById, findMepById } from './view2d.js';
-import { buildPrompt, parseAnswer } from './ai-prompt.js';
+import { buildPrompt, buildSnapshot, parseAnswer } from './ai-prompt.js';
+import { makeTools, runAgent, REVIEW_TASK, errorText } from './agent.js';
 import { readRvt } from './rvt.js';
 import { diagnose, SEV_LABEL } from './diagnose.js';
 import { planTour } from './tour.js';
@@ -50,6 +51,7 @@ const state = {
   partRegions: null,
   fixtures: [], // tanınan tefriş (klozet, lavabo, klima...)
   decorIgnored: 0,
+  chat: [], // Claude ajan sohbeti (sayfa tutar; Claude hafızasız)
 };
 
 // ------------------------------------------------------------ yardımcılar
@@ -189,6 +191,7 @@ function onDrawing(d, secs) {
   renderLayers();
   renderFacts(secs);
   ['btnDetect', 'btnPrompt', 'btnAsk'].forEach((id) => ($(id).disabled = false));
+  agentUi.onDrawing();
   runDetect();
   plan.fitModel();
   overlay(null);
@@ -1133,52 +1136,183 @@ $('answerIn').addEventListener('paste', () => setTimeout(() => {
   $('answerIn').oninput();
   if (state.drawing && /\{[\s\S]*\}/.test($('answerIn').value)) applyAnswer();
 }, 0));
-capSample.then((sample) => {
-  if (!sample) return;
-  const b = $('btnAsk');
-  b.hidden = false;
-  b.disabled = !state.drawing;
-  b.onclick = async () => {
-    if (!state.drawing) return;
-    const prompt = currentPrompt();
-    $('promptOut').value = prompt;
-    b.disabled = true;
-    aiStatus('Claude projeyi analiz ediyor… (yarım dakika kadar sürebilir)');
+// ------------------------------------------------------------ Claude ajan modu (abonelik, anahtarsız)
+// Sayfanın araçlara açtığı fonksiyonlar: küçük düz metin / veri döndürür
+const fmtRoom = (r) => `${r.id}\t${(Math.abs(r.area) * state.model.unitScale ** 2 / 1e4).toFixed(1)} m²\t${state.overrides[r.id]?.name ?? r.name ?? ''}`;
+const agentApi = {
+  snapshot: () => buildSnapshot({
+    drawing: state.drawing, roles: state.roles, params: state.params, buildParams: state.build, model: state.model, fileName: state.fileName,
+    mepStats: state.mepStats, mepProfiles: state.mepProfiles, elevations: state.elevations, ceiling: state.ceiling, islands: state.islands,
+    diagnostics: diagnose(state), mep: state.mep, fixtures: liveFixtures(),
+  }),
+  listLayers: (filter) => {
+    const f = filter.toLocaleLowerCase('tr');
+    const rows = state.drawing.layers.map((l, i) => ({ l, i })).filter(({ l }) => l.count && (!f || l.name.toLocaleLowerCase('tr').includes(f)))
+      .sort((a, b) => b.l.count - a.l.count).slice(0, 200)
+      .map(({ l, i }) => { const p = state.mepProfiles.get(i); return `${l.name}\t${l.count}\t${roleOf(i) || '-'}\t${p?.kind ? `${p.kind}/${p.system}${p.unknown ? ' (BİLİNMİYOR)' : ''}` : ''}`; });
+    return 'ad\tnesne\trol\ttesisat profili\n' + (rows.join('\n') || '(yok)');
+  },
+  listOpenings: (kind) => {
+    const m = state.model;
+    const rows = m.openings.filter((o) => !state.overrides[o.id]?.deleted && (!kind || effKind(o) === kind)).map((o) => {
+      const ov = state.overrides[o.id];
+      return `${o.id}\t${effKind(o)}\t${cm(o.width)} cm\t${o.exterior ? 'dış' : 'iç'}\t${o.why || ''}${ov?.kind && ov.kind !== o.kind ? `\t(değiştirildi: ${o.kind} → ${ov.kind})` : ''}`;
+    });
+    return 'id\ttür\tgenişlik\tkonum\tgerekçe\n' + (rows.join('\n') || '(yok)');
+  },
+  listRooms: () => {
+    const fx = liveFixtures();
+    return 'id\talan\tad\ttefriş\n' + state.model.rooms.filter((r) => !state.overrides[r.id]?.deleted).map((r) => {
+      const inside = fx.filter((f) => !state.overrides[f.id]?.deleted && pointInPoly(f.center[0], f.center[1], r.poly)).map((f) => f.label);
+      return fmtRoom(r) + '\t' + [...new Set(inside)].join(', ');
+    }).join('\n');
+  },
+  listWalls: () => {
+    const m = state.model, s = m.unitScale;
+    const bb = (poly) => { let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity; for (const [x, y] of poly) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); } return `[${a.toFixed(0)}, ${b.toFixed(0)}, ${c.toFixed(0)}, ${d.toFixed(0)}]`; };
+    const rows = [
+      ...m.walls.map((w) => `${w.id}\tduvar\t${Math.round(w.thickness * s)} cm\t${((w.length || 0) * s / 100).toFixed(2)} m\t${w.exterior ? 'dış' : 'iç'}\t${bb(w.poly)}`),
+      ...m.columns.map((c) => `${c.id}\tkolon\t\t\t\t${bb(c.poly)}`),
+      ...(m.curtains || []).map((g) => `${g.id}\tcam cephe\t${Math.round(g.thickness * s)} cm\t${(g.length * s / 100).toFixed(2)} m\t\t${bb(g.poly)}`),
+    ].filter((r) => !state.overrides[r.split('\t')[0]]?.deleted);
+    return `çizim birimi: ${UNIT_NAMES[state.units] || state.units} (1 birim = ${s} cm); elle çizilen duvar: ${state.manualWalls?.length || 0}\nid\ttür\tkalınlık\tuzunluk\tkonum\tsınır kutusu [x1,y1,x2,y2]\n` + rows.slice(0, 400).join('\n');
+  },
+  listFixtures: () => {
+    const rooms = state.model.rooms;
+    return 'id\ttür\tölçü\tkaynak\tmahal\n' + (liveFixtures().filter((f) => !state.overrides[f.id]?.deleted).map((f) => {
+      const r = rooms.find((r) => pointInPoly(f.center[0], f.center[1], r.poly));
+      return `${f.id}\t${f.kind} (${f.label})\t${Math.round(f.wCm)}×${Math.round(f.hCm)} cm\t${f.source === 'block' ? 'blok: ' + f.name : 'küme: ' + f.name}\t${r ? r.id + ' ' + (state.overrides[r.id]?.name ?? r.name ?? '') : '-'}`;
+    }).join('\n') || '(tefriş bulunamadı)') + `\nyok sayılan süs çizimi: ${state.decorIgnored}`;
+  },
+  listMep: () => {
+    const rows = state.mepStats.map((st) => ({ st, p: state.mepProfiles.get(st.l) || {} }))
+      .filter(({ st, p }) => (p.kind && p.kind !== 'ignore') || p.unknown || st.count >= 100)
+      .sort((a, b) => (a.p.unknown ? 0 : 1) - (b.p.unknown ? 0 : 1) || b.st.count - a.st.count).slice(0, 80)
+      .map(({ st, p }) => `${st.name}\t${st.count} nesne (açık ${st.open}, kapalı ${st.closed}), ${st.lengthM} m, tipik ${st.typicalCm} cm\t→ ${p.unknown && !p.kind ? 'BİLİNMİYOR' : `${p.kind}/${p.system}/${p.elevRef}${p.elevOffsetCm >= 0 ? '+' : ''}${p.elevOffsetCm ?? 0}cm/${p.sizeCm ?? '-'}cm [${p.source}]`}${st.blocks?.length ? '\tbloklar: ' + st.blocks.join(', ') : ''}`);
+    const sum = mepSummary();
+    return `çıkarılan: ${state.mep?.pipes.length || 0} boru, ${state.mep?.ducts.length || 0} kanal, ${state.mep?.boxes.length || 0} cihaz/uç birim; asma tavan ${state.ceiling.cm} cm (${state.ceiling.source})\nsistemler: ${[...sum.entries()].map(([k, v]) => `${(SYSTEMS[k] || SYSTEMS.other).label}${v.pipeM ? ' ' + v.pipeM.toFixed(0) + ' m' : ''}${v.n ? ' ' + v.n + ' ad.' : ''}`).join(', ') || '-'}\nkatman\tiçerik\tprofil\n` + (rows.join('\n') || '(tesisat katmanı yok)');
+  },
+  diagnostics: () => diagnose(state).map((x, i) => `${i + 1}. [${x.severity}] ${x.text}${x.data?.length && x.data.length <= 40 ? ' (' + x.data.join(', ') + ')' : ''}`).join('\n') || 'Belirgin sorun yok.',
+  apply: (changes) => applyAnswer(changes),
+  deleteElements: (ids) => {
+    const ok = [], bad = [];
+    for (const id of ids) {
+      if (findById(state.model, id) || state.fixtures.some((f) => f.id === id)) { state.overrides[id] = { ...(state.overrides[id] || {}), deleted: true }; ok.push(id); } else bad.push(id);
+    }
+    plan.setModel(state.model, state.overrides); plan.setFixtures(liveFixtures()); renderStats(); renderTodo(); rebuild3d(); renderSel();
+    return `kaldırıldı: ${ok.join(', ') || '-'}${bad.length ? '; bulunamadı: ' + bad.join(', ') : ''}`;
+  },
+  setFixture: (id, kind) => {
+    if (!state.fixtures.some((f) => f.id === id)) throw new Error(id + ' bulunamadı');
+    if (!FIXTURE_KINDS[kind]) throw new Error('bilinmeyen tür: ' + kind);
+    setOv(id, { kind }); plan.setFixtures(liveFixtures());
+    return `${id} → ${FIXTURE_KINDS[kind].label}`;
+  },
+  addWall: (x1, y1, x2, y2, tCm) => {
+    if (![x1, y1, x2, y2].every(Number.isFinite)) throw new Error('koordinatlar sayı olmalı');
+    const before = state.model.rooms.length;
+    $('manualWallCm').value = String(tCm);
+    addManualWall([x1, y1], [x2, y2]);
+    return `duvar eklendi; mahal sayısı ${before} → ${state.model.rooms.length}`;
+  },
+  setParts: (ids) => {
+    const list = partStats().map((i) => `${i.id}\t${i.label || 'Bölüm ' + i.id}\t${Math.round((i.bbox[2] - i.bbox[0]) * (UNIT_TO_CM[state.units] ?? 1) / 100)}×${Math.round((i.bbox[3] - i.bbox[1]) * (UNIT_TO_CM[state.units] ?? 1) / 100)} m\t${i.n} nesne\tduvar çizgisi ${i._w}, tesisat ${i._m}${state.parts?.includes(i.id) || state.planIsland?.id === i.id ? '\t(seçili)' : ''}`);
+    if (ids && ids.length) {
+      const valid = ids.filter((id) => state.islands.some((i) => i.id === id));
+      if (!valid.length) throw new Error('geçerli bölüm kimliği yok');
+      state.parts = valid; processParts(valid);
+      return `${valid.length} bölüm işleniyor: ${valid.join(', ')} (algılama yenilendi; listeleri tekrar oku)`;
+    }
+    return 'id\tad\tboyut\tnesne\tiçerik\n' + (list.join('\n') || '(tek bölüm)');
+  },
+  show: ({ view, select: sel, tour }) => {
+    if (view === '3d' || view === 'plan') showTab(view);
+    if (sel) { if (!findById(state.model, sel) && !state.fixtures.some((f) => f.id === sel)) throw new Error(sel + ' bulunamadı'); select(sel); if (state.tab === 'plan') plan.fitModel(); }
+    if (tour) startTour();
+    return 'tamam';
+  },
+};
+
+const agentUi = (() => {
+  let sample = null, tools = null, busy = false, ctl = null;
+  const log = $('chatLog');
+  const addMsg = (cls, text) => { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; log.appendChild(d); log.scrollTop = log.scrollHeight; return d; };
+  const setBusy = (b) => { busy = b; $('agentReview').disabled = b || !state.drawing; $('chatSend').disabled = b || !state.drawing; $('agentStop').hidden = !b; };
+  // araç çağrılarını günlüğe yaz
+  const wrapTools = (list) => list.map((t) => ({ ...t, execute: async (input, cx) => {
+    const line = addMsg('tool', `${t.name}${input && Object.keys(input).length ? ' ' + JSON.stringify(input).slice(0, 160) : ''} …`);
+    try { const r = await t.execute(input, cx); line.textContent = `${t.name}: ${String(typeof r === 'string' ? r : JSON.stringify(r)).split('\n')[0].slice(0, 160)}`; return r; }
+    catch (e) { line.textContent = `${t.name}: hata — ${e.message}`; line.classList.add('err'); throw e; }
+  } }));
+  async function run(message, { tier = 'default', shown = message } = {}) {
+    if (!sample || busy || !state.drawing) return null;
+    setBusy(true);
+    addMsg('user', shown);
+    const out = addMsg('ai', 'Düşünüyor…');
+    setStatus($('agentStatus'), tier === 'complex' ? 'Claude projeyi inceliyor; araç çağrıları aşağıda görünür (1-3 dakika sürebilir).' : 'Claude çalışıyor…');
+    ctl = new AbortController();
     try {
-      const r = await sample(prompt, { onText: ({ text }) => { $('answerIn').value = text; } });
-      $('answerIn').value = r.text;
-      $('btnApply').disabled = false;
-      applyAnswer();
+      const r = await runAgent(sample, {
+        snapshot: agentApi.snapshot(), history: state.chat, message, tools, tier, signal: ctl.signal,
+        onText: ({ text }) => { out.textContent = text; log.scrollTop = log.scrollHeight; },
+      });
+      out.textContent = r.text;
+      state.chat.push({ role: 'user', content: shown }, { role: 'assistant', content: r.text });
+      setStatus($('agentStatus'), r.truncated ? 'Cevap uzunluk sınırında kesildi.' : 'Tamam.', r.truncated ? 'err' : 'ok');
+      return r;
     } catch (e) {
-      aiStatus(e?.code === 'not_granted' ? 'Claude erişimine izin verilmedi.' : 'Claude cevap veremedi: ' + (e?.message || e?.code), 'err');
-    } finally { b.disabled = false; }
+      out.textContent = e?.text || '';
+      if (!e?.text) out.remove();
+      addMsg('ai err', errorText(e));
+      setStatus($('agentStatus'), errorText(e), e?.code === 'cancelled' ? '' : 'err');
+      if (e?.code === 'not_granted' || e?.code === 'sampling_disabled' || e?.code === 'tools_unavailable') disable();
+      return null;
+    } finally { setBusy(false); ctl = null; }
+  }
+  function disable() { $('agentBox').classList.add('off'); $('agentUnavail').hidden = false; $('agentIntro').hidden = true; $('agentReview').hidden = true; $('chatSend').hidden = true; $('chatIn').hidden = true; $('wizClaude').hidden = true; $('btnAsk').hidden = true; }
+  capSample.then(async (sm) => {
+    if (!sm) return disable();
+    const lim = await sm.limits().catch(() => null);
+    if (!lim?.tools) return disable();
+    sample = sm;
+    tools = wrapTools(makeTools(agentApi)).slice(0, lim.tools.maxCount || 20);
+    $('agentUnavail').hidden = true; $('agentIntro').hidden = false;
+    $('agentTier').textContent = `${tools.length} araç hazır · kullanım aboneliğinizden düşer`;
+    setBusy(false);
+    // analiz ekranı: uçtan uca inceleme, sonra 3B
+    const w = $('wizClaude');
+    w.hidden = false;
+    w.textContent = 'Claude projeyi uçtan uca incelesin';
+    w.onclick = async () => {
+      if (!state.drawing || busy) return;
+      w.disabled = true;
+      setStatus($('wizStatus'), 'Claude projeyi inceliyor; ilerleme Asistan sekmesinde görünür (1-3 dakika sürebilir).');
+      showPanel('pAi');
+      const r = await run(REVIEW_TASK, { tier: 'complex', shown: 'Projeyi uçtan uca incele ve gerekli ayarları yap.' });
+      w.disabled = false;
+      if (r) { $('wizAnswer').value = r.text; setStatus($('wizStatus'), 'İnceleme tamamlandı; model gösteriliyor.', 'ok'); $('wizShow3d').click(); }
+      else setStatus($('wizStatus'), $('agentStatus').textContent, 'err');
+    };
+    const b = $('btnAsk');
+    b.hidden = true; // ajan modu varken kopyala-yapıştır yolundaki kısayol gereksiz
+  });
+  $('agentReview').onclick = () => run(REVIEW_TASK, { tier: 'complex', shown: 'Projeyi uçtan uca incele ve gerekli ayarları yap.' });
+  $('agentStop').onclick = () => ctl?.abort();
+  const send = () => { const t = $('chatIn').value.trim(); if (!t) return; $('chatIn').value = ''; run(t); };
+  $('chatSend').onclick = send;
+  $('chatIn').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+  return {
+    onDrawing() { state.chat = []; log.innerHTML = ''; setStatus($('agentStatus'), ''); if (sample) setBusy(false); },
+    available: () => !!sample,
   };
-  // analiz ekranında: Claude'a sor, uygula, 3B göster ve gez
-  const w = $('wizClaude');
-  w.hidden = false;
-  w.onclick = async () => {
-    if (!state.drawing) return;
-    w.disabled = true;
-    setStatus($('wizStatus'), 'Claude projeyi analiz ediyor… (yarım dakika kadar sürebilir)');
-    try {
-      const prompt = currentPrompt();
-      $('promptOut').value = prompt;
-      const r = await sample(prompt, { onText: ({ text }) => { $('wizAnswer').value = text; } });
-      $('wizAnswer').value = r.text;
-      $('answerIn').value = r.text;
-      applyAnswer();
-      setStatus($('wizStatus'), $('aiStatus').textContent, 'ok');
-      $('wizShow3d').click();
-    } catch (e) {
-      setStatus($('wizStatus'), e?.code === 'not_granted' ? 'Claude erişimine izin verilmedi; komutu kopyalayıp kendiniz sorabilirsiniz.' : 'Claude cevap veremedi: ' + (e?.message || e?.code), 'err');
-    } finally { w.disabled = false; }
-  };
-});
+})();
+
 
 function applyAnswer(given) {
   let a = given && typeof given === 'object' && !(given instanceof Event) ? given : null;
-  if (!a) { try { a = parseAnswer($('answerIn').value); } catch (e) { aiStatus(e.message, 'err'); return; } }
+  if (!a) { try { a = parseAnswer($('answerIn').value); } catch (e) { aiStatus(e.message, 'err'); return e.message; } }
   const d = state.drawing;
+  if (!d) return 'Açık bir çizim yok.';
   const byName = new Map(d.layers.map((l, i) => [l.name.toLocaleLowerCase('tr'), i]));
   const done = [];
   const missing = [];
@@ -1275,6 +1409,7 @@ function applyAnswer(given) {
   if (layersChanged && (a.openings || a.rooms)) msg += ' Katmanlar değiştiği için boşluk/mahal numaraları yenilendi; ince ayar için yeni bir komut oluşturup tekrar sorun.';
   if (a.notes) msg += ' Not: ' + a.notes;
   aiStatus(msg, done.length ? 'ok' : 'err');
+  return msg;
 }
 $('btnApply').onclick = () => applyAnswer();
 
